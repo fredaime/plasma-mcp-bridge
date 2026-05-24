@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.kde.plasma.mcpbridge
+Exec=@KDE_INSTALL_FULL_BINDIR@/plasma-mcp-bridge
