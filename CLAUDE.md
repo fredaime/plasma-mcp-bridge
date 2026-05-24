@@ -39,8 +39,8 @@ is expected, not a regression.
 
 ## Architecture
 
-Three layers, each in its own directory under `src/` (include paths are rooted at
-`src/`, so headers are included as `"mcp/..."`, `"dbus/..."`, `"tools/..."`):
+Layers under `src/` (include paths are rooted at `src/`, so headers are included as
+`"mcp/..."`, `"dbus/..."`, `"core/..."`, `"backends/..."`, `"tools/..."`):
 
 - **`src/mcp/` — protocol layer (transport-agnostic of D-Bus).**
   - `StdioTransport` reads newline-delimited JSON-RPC from stdin via a
@@ -61,14 +61,45 @@ Three layers, each in its own directory under `src/` (include paths are rooted a
   JSON int into a uint32) happens by routing calls through `QDBusInterface` when an
   interface name is supplied.
 
-- **`src/tools/` — concrete tools.** Each tool takes a `DBusBridge*` and is
-  registered in `main.cpp`. `dbustools.{h,cpp}` holds the three generic tools;
-  `notifytool.{h,cpp}` is a high-level convenience tool over a freedesktop standard
-  and serves as the template for richer Plasma-specific tools.
+- **`src/core/` — the provider seam (plugin ABI).**
+  - `Backend` is the unit a plugin contributes: it has a `name`, a `description`,
+    and one `registerTools()` call that hands tools to the registry.
+  - `PluginInterface` (in `core/plugin.h`) is what out-of-tree shared libraries
+    implement. The stable IID is
+    `org.kde.plasma.mcpbridge.PluginInterface/1.0` — bump the major when the
+    ABI changes incompatibly. `PluginLoader` wraps `QPluginLoader`.
+  - `SkillEmitter::render(registry)` walks the registry and produces deterministic
+    Markdown for a downstream packager that wants to ship an MCP skill alongside
+    the bridge. Exposed via the `--emit-skill` CLI flag.
 
-**To add a tool:** subclass `Tool`, implement the four methods (return a JSON Schema
-from `inputSchema`), and `registry.add(std::make_unique<YourTool>(&bridge))` in
-`main.cpp`. Express the work as `DBusBridge` calls rather than new dependencies.
+- **`src/backends/` — built-in backends.** `DBusBackend` registers the three
+  generic D-Bus tools; `NotificationBackend` registers the freedesktop notification
+  tool. They are the template for new built-in capabilities (input, capture, …).
+
+- **`src/tools/` — concrete `Tool` implementations.** Each tool takes a
+  `DBusBridge*` and is added to the registry by some backend. `dbustools.{h,cpp}`
+  holds the three generic tools; `notifytool.{h,cpp}` is a high-level convenience
+  tool over a freedesktop standard.
+
+**To add a tool inside the bridge:** subclass `Tool`, implement the four methods,
+and register it from an existing backend's `registerTools()` (or add a new
+backend and register it in `main.cpp`). Express the work as `DBusBridge` calls
+rather than new dependencies.
+
+**To add an out-of-tree plugin:** subclass `PluginInterface` in a `QObject`-derived
+class with `Q_PLUGIN_METADATA(IID PLASMA_MCP_BRIDGE_PLUGIN_IID)` and
+`Q_INTERFACES(PluginInterface)`, return your `Backend`s from `createBackends()`,
+build as a `MODULE` library, and run the bridge with `--plugin /path/to/lib.so`.
+Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
+`target_link_libraries(... PRIVATE PlasmaMcpBridge::PluginInterface)`.
+
+## CLI flags
+
+- `--plugin <path>` — load a backend plugin. Repeatable.
+- `--emit-skill` — write the deterministic Markdown tool reference (every
+  registered tool, including those contributed by `--plugin`) to stdout and exit.
+  Used by skill packagers to detect drift between an installed skill and the
+  shipping tool surface.
 
 ## Conventions
 
