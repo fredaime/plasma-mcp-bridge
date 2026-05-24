@@ -1,0 +1,36 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            extra-cmake-modules qt6-base-dev qt6-base-dev-tools
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Smoke test (protocol)
+        run: |
+          out=$(printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | ./build/bin/plasma-mcp-bridge 2>/dev/null)
+          echo "$out"
+          echo "$out" | grep -q '"name":"plasma-mcp-bridge"'
+          echo "$out" | grep -q '"name":"dbus_call"'
