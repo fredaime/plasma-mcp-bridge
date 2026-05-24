@@ -38,6 +38,12 @@ install(TARGETS plasma-mcp-bridge ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 add_library(PlasmaMcpBridgePluginInterface INTERFACE)
 add_library(PlasmaMcpBridge::PluginInterface ALIAS PlasmaMcpBridgePluginInterface)
 
+# The exported target gets EXPORT_NAME stripped of the package prefix so
+# downstream consumers see PlasmaMcpBridge::PluginInterface (matching the
+# in-tree alias) rather than PlasmaMcpBridge::PlasmaMcpBridgePluginInterface.
+set_target_properties(PlasmaMcpBridgePluginInterface PROPERTIES
+    EXPORT_NAME PluginInterface)
+
 target_link_libraries(PlasmaMcpBridgePluginInterface
     INTERFACE Qt6::Core Qt6::DBus)
 
