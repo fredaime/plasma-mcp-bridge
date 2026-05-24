@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "mcp/tool.h"
+
 #include <QHash>
 #include <QJsonArray>
 #include <QString>
 
 #include <memory>
 #include <vector>
-
-class Tool;
 
 class ToolRegistry
 {

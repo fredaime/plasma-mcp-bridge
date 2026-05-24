@@ -119,6 +119,31 @@ Any reply is marshalled back to JSON, including arrays, structs, and `a{sv}` map
 - Failed D-Bus calls return an MCP tool error (`isError: true`), not a transport
   error — so an agent can read the message and retry.
 
+## Extending: backends and plugins
+
+The bridge exposes a small **plugin ABI** so additional capabilities (richer
+input, screen capture, accessibility, alternative desktops) can ship as
+independent shared libraries instead of forks.
+
+A plugin implements `PluginInterface` (in `<plasma-mcp-bridge/core/plugin.h>`)
+and returns one or more `Backend` objects; each backend adds its `Tool`s to the
+registry at startup. The ABI is `org.kde.plasma.mcpbridge.PluginInterface/1.0`.
+Consume it from CMake with:
+
+```cmake
+find_package(PlasmaMcpBridge REQUIRED)
+add_library(my_backend MODULE my_backend.cpp)
+target_link_libraries(my_backend PRIVATE PlasmaMcpBridge::PluginInterface)
+```
+
+Then run the bridge with `--plugin /path/to/libmy_backend.so` (repeatable).
+See `CLAUDE.md` for the full ABI surface.
+
+`--emit-skill` writes a deterministic Markdown reference of every registered
+tool (built-in + plugins) to stdout — useful for packagers that ship a Claude
+Code or other MCP-client skill alongside the bridge and want to fail CI when
+the skill drifts from the live tool surface.
+
 ## Roadmap
 
 - Input control (pointer + keyboard) across X11 and Wayland
