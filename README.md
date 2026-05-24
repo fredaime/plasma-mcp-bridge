@@ -75,6 +75,19 @@ on the session bus, so it is visible to the running desktop (e.g. in
 - Implemented methods: `initialize`, `notifications/initialized`, `ping`,
   `tools/list`, `tools/call`.
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the build
+setup, conventions, and the sign-off/CLA steps. Development happens against the
+protected `main` branch via pull requests, and all participants are expected to
+follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+This core is released under the **MIT License** — see [LICENSE](LICENSE).
+
+The project follows an open-core model: the core is free and permissively
+licensed, while premium components are offered under a separate commercial
+license. Because of this, contributions are accepted under the
+[Contributor License Agreement](CLA.md), which lets the maintainers distribute
+contributions under both the open-source and commercial licenses.
