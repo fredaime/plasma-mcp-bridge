@@ -14,6 +14,7 @@
 #include <QMetaType>
 
 #include <cmath>
+#include <limits>
 
 DBusBridge::DBusBridge() = default;
 
@@ -172,8 +173,15 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     case QMetaType::UInt:
     case QMetaType::LongLong:
         return static_cast<qint64>(value.toLongLong());
-    case QMetaType::ULongLong:
-        return static_cast<qint64>(value.toULongLong());
+    case QMetaType::ULongLong: {
+        // A uint64 above INT64_MAX would wrap to a negative number if cast
+        // straight to qint64, so fall back to double for those (lossy, but
+        // it preserves sign and magnitude).
+        const qulonglong u = value.toULongLong();
+        if (u <= static_cast<qulonglong>(std::numeric_limits<qint64>::max()))
+            return static_cast<qint64>(u);
+        return static_cast<double>(u);
+    }
     case QMetaType::Float:
     case QMetaType::Double:
         return value.toDouble();
