@@ -7,6 +7,7 @@
 #include "mcp/toolregistry.h"
 
 #include <QJsonArray>
+#include <QStringList>
 
 #ifndef PLASMA_MCP_BRIDGE_VERSION
 #define PLASMA_MCP_BRIDGE_VERSION "0.0.0"
@@ -16,6 +17,15 @@ namespace {
 // Last protocol revision this server is known to speak. When a client asks
 // for a version we recognise we echo it back; otherwise we fall back to this.
 constexpr auto kDefaultProtocolVersion = "2024-11-05";
+
+// The set of protocol revisions this server actually understands. A client
+// may request any of these and have it echoed back; anything else negotiates
+// down to kDefaultProtocolVersion.
+bool isSupportedProtocolVersion(const QString &version)
+{
+    static const QStringList supported = {QLatin1String(kDefaultProtocolVersion)};
+    return supported.contains(version);
+}
 } // namespace
 
 Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *parent)
@@ -36,28 +46,34 @@ void Server::onMessage(const QJsonObject &message)
     if (method.isEmpty())
         return; // A response or malformed frame; nothing to dispatch.
 
+    if (method == QLatin1String("notifications/initialized")) {
+        // Client handshake complete. No per-connection state to track, and a
+        // notification must never be answered, so just accept it.
+        return;
+    }
+
+    if (!isRequest)
+        return; // Any other notification we don't handle: ignore, per JSON-RPC.
+
     if (method == QLatin1String("initialize")) {
         handleInitialize(id, params);
-    } else if (method == QLatin1String("notifications/initialized")) {
-        m_initialized = true;
     } else if (method == QLatin1String("ping")) {
         m_transport->send(mcp::jsonrpc::makeResult(id, QJsonObject{}));
     } else if (method == QLatin1String("tools/list")) {
         handleToolsList(id);
     } else if (method == QLatin1String("tools/call")) {
         handleToolsCall(id, params);
-    } else if (isRequest) {
+    } else {
         m_transport->send(mcp::jsonrpc::makeError(
             id, mcp::jsonrpc::MethodNotFound,
             QStringLiteral("Method not found: %1").arg(method)));
     }
-    // Unknown notifications are silently ignored, per JSON-RPC.
 }
 
 void Server::handleInitialize(const QJsonValue &id, const QJsonObject &params)
 {
     QString protocolVersion = params.value(QStringLiteral("protocolVersion")).toString();
-    if (protocolVersion.isEmpty())
+    if (!isSupportedProtocolVersion(protocolVersion))
         protocolVersion = QLatin1String(kDefaultProtocolVersion);
 
     QJsonObject toolsCapability;

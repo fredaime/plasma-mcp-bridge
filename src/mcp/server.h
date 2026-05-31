@@ -24,5 +24,4 @@ private:
 
     StdioTransport *m_transport;
     ToolRegistry *m_registry;
-    bool m_initialized = false;
 };
