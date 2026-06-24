@@ -39,6 +39,60 @@ cross-desktop standards like `org.freedesktop.Notifications`,
 `org.freedesktop.portal.*`, and `org.mpris.MediaPlayer2.*`. Because the bridge is a
 generic D-Bus client, a single set of tools reaches all of it.
 
+## Security & trust model
+
+> [!WARNING]
+> **Security notice** — The generic `dbus_call` capability exposes a powerful
+> local automation surface. This repository is intended for controlled
+> experimentation. Production deployments should enforce explicit service and
+> method allowlists, scoped identities, confirmation policies, audit logging, and
+> revocation **outside the model**.
+
+Treat the model as untrusted. Authorization belongs on the path between what the
+model *proposes* and what actually reaches the bus — not inside the model, and not
+inside the bridge:
+
+```
+Model
+  │ proposes
+  ▼
+MCP client
+  │ requests
+  ▼
+Policy / identity / approval
+  │ authorizes
+  ▼
+plasma-mcp-bridge
+  │ invokes
+  ▼
+D-Bus service
+```
+
+The **Policy / identity / approval** stage is not implemented in the public core
+yet — but the diagram shows where it belongs. Every request should pass through it
+before the bridge invokes D-Bus, so that allow/deny decisions, scoping, and audit
+live in a component the model can neither reach nor rewrite.
+
+### Walkthrough
+
+The first three steps run against today's tools; the last two are the policy
+layer's responsibility:
+
+1. **Discover** — the agent calls `dbus_list_services` and finds
+   `org.freedesktop.Notifications` on the bus.
+2. **Introspect** — `dbus_introspect` on `/org/freedesktop/Notifications` returns
+   the interface XML, revealing the `Notify` method.
+3. **Request** — the agent calls `dbus_call` (or the `desktop_notify` helper) to
+   invoke `Notify`.
+4. **Authorize** — the policy layer matches the request against its allowlist;
+   `Notify` is permitted, so it reaches the bus and the notification appears.
+5. **Reject** — later the agent tries a method that is *not* allowlisted — say
+   `PowerOff` on `org.freedesktop.login1` — and the policy layer denies it before
+   it ever reaches D-Bus.
+
+Step 5 is the whole point: the bridge can reach anything on the bus, so the safety
+lives in the layer that decides what it *may* reach.
+
 ## Requirements
 
 - CMake ≥ 3.16, a C++17 compiler, Ninja
