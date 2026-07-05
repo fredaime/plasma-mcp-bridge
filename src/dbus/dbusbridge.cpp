@@ -11,6 +11,7 @@
 #include <QDBusSignature>
 #include <QDBusVariant>
 #include <QJsonObject>
+#include <QMetaMethod>
 #include <QMetaType>
 
 #include <cmath>
@@ -69,6 +70,29 @@ DBusResult DBusBridge::introspect(const QString &busName, const QString &service
     return DBusResult::success(reply.value());
 }
 
+// Convert loosely-typed arguments (as produced by jsonToVariant: qlonglong
+// for any integer, QVariantList for any array) to the parameter types of the
+// introspected method, so Qt marshals the signature the remote expects.
+// Best-effort: arguments that don't convert are left untouched.
+static void coerceToMethodSignature(const QDBusInterface &iface, const QString &method,
+                                    QVariantList &args)
+{
+    const QMetaObject *mo = iface.metaObject();
+    for (int i = mo->methodOffset(); i < mo->methodCount(); ++i) {
+        const QMetaMethod candidate = mo->method(i);
+        if (QString::fromLatin1(candidate.name()) != method
+            || candidate.parameterCount() != args.size())
+            continue;
+        for (int p = 0; p < candidate.parameterCount(); ++p) {
+            const QMetaType target = candidate.parameterMetaType(p);
+            if (target.isValid() && args[p].metaType() != target
+                && QMetaType::canConvert(args[p].metaType(), target))
+                args[p].convert(target);
+        }
+        return;
+    }
+}
+
 DBusResult DBusBridge::callMethod(const QString &busName, const QString &service,
                                   const QString &path, const QString &interface,
                                   const QString &method, const QJsonArray &args)
@@ -84,9 +108,12 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
 
     QDBusMessage reply;
     if (!interface.isEmpty()) {
-        // Going through QDBusInterface lets Qt introspect the target and
-        // coerce our loosely-typed arguments to the method's real signature
-        // (e.g. a JSON integer into the uint32 a method expects).
+        // Going through QDBusInterface gives us the introspected signature,
+        // but Qt only uses it when the argument types already match — with
+        // mismatched types callWithArgumentList silently degrades to an
+        // un-introspected call that puts the wrong signature on the wire
+        // (e.g. 'x' where the method wants 'u'). So convert each argument
+        // to the introspected parameter type ourselves before calling.
         QDBusInterface iface(service, path, interface, bus);
         if (!iface.isValid()) {
             const QString message = iface.lastError().message();
@@ -94,6 +121,7 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
                 ? QStringLiteral("No such interface %1 on %2 %3").arg(interface, service, path)
                 : message);
         }
+        coerceToMethodSignature(iface, method, variantArgs);
         reply = iface.callWithArgumentList(QDBus::Block, method, variantArgs);
     } else {
         QDBusMessage call = QDBusMessage::createMethodCall(service, path, QString(), method);
