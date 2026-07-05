@@ -9,6 +9,7 @@
 #include <QDBusObjectPath>
 #include <QDBusReply>
 #include <QDBusSignature>
+#include <QDBusUnixFileDescriptor>
 #include <QDBusVariant>
 #include <QJsonObject>
 #include <QMetaMethod>
@@ -246,34 +247,56 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     }
 }
 
+// Extract the current basic-typed element into a properly typed lvalue.
+// Extracting into a QVariant (operator>>(..., QVariant&)) is NOT equivalent:
+// that overload assumes the current element is a D-Bus variant ('v') and
+// recurses into it unconditionally — on any other element type the libdbus
+// iterator recursion crashes. So dispatch on the wire signature instead.
+static QVariant extractBasic(const QDBusArgument &argument)
+{
+    const QString signature = argument.currentSignature();
+    switch (signature.isEmpty() ? '\0' : signature.at(0).toLatin1()) {
+    case 'b': { bool v; argument >> v; return v; }
+    case 'y': { uchar v; argument >> v; return v; }
+    case 'n': { short v; argument >> v; return v; }
+    case 'q': { ushort v; argument >> v; return v; }
+    case 'i': { int v; argument >> v; return v; }
+    case 'u': { uint v; argument >> v; return v; }
+    case 'x': { qlonglong v; argument >> v; return v; }
+    case 't': { qulonglong v; argument >> v; return v; }
+    case 'd': { double v; argument >> v; return v; }
+    case 's': { QString v; argument >> v; return v; }
+    case 'o': { QDBusObjectPath v; argument >> v; return QVariant::fromValue(v); }
+    case 'g': { QDBusSignature v; argument >> v; return QVariant::fromValue(v); }
+    case 'h': { QDBusUnixFileDescriptor v; argument >> v; return QVariant::fromValue(v); }
+    default:   { QString v; argument >> v; return v; } // unreachable: 'v' and
+                // containers are handled by demarshall's other branches
+    }
+}
+
 QJsonValue DBusBridge::demarshall(const QDBusArgument &argument)
 {
     switch (argument.currentType()) {
     case QDBusArgument::BasicType:
+        return variantToJson(extractBasic(argument));
     case QDBusArgument::VariantType: {
-        QVariant value;
+        QDBusVariant value;
         argument >> value;
-        return variantToJson(value);
+        return variantToJson(value.variant());
     }
     case QDBusArgument::ArrayType: {
         QJsonArray array;
         argument.beginArray();
-        while (!argument.atEnd()) {
-            QVariant element;
-            argument >> element;
-            array.append(variantToJson(element));
-        }
+        while (!argument.atEnd())
+            array.append(demarshall(argument));
         argument.endArray();
         return array;
     }
     case QDBusArgument::StructureType: {
         QJsonArray array;
         argument.beginStructure();
-        while (!argument.atEnd()) {
-            QVariant field;
-            argument >> field;
-            array.append(variantToJson(field));
-        }
+        while (!argument.atEnd())
+            array.append(demarshall(argument));
         argument.endStructure();
         return array;
     }
@@ -282,11 +305,9 @@ QJsonValue DBusBridge::demarshall(const QDBusArgument &argument)
         argument.beginMap();
         while (!argument.atEnd()) {
             argument.beginMapEntry();
-            QVariant key;
-            QVariant value;
-            argument >> key >> value;
+            const QVariant key = extractBasic(argument); // map keys are basic by spec
+            object.insert(key.toString(), demarshall(argument));
             argument.endMapEntry();
-            object.insert(key.toString(), variantToJson(value));
         }
         argument.endMap();
         return object;
