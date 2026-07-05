@@ -87,9 +87,16 @@ static void coerceToMethodSignature(const QDBusInterface &iface, const QString &
             continue;
         for (int p = 0; p < candidate.parameterCount(); ++p) {
             const QMetaType target = candidate.parameterMetaType(p);
-            if (target.isValid() && args[p].metaType() != target
-                && QMetaType::canConvert(args[p].metaType(), target))
-                args[p].convert(target);
+            if (!target.isValid() || args[p].metaType() == target)
+                continue;
+            // Convert a copy: canConvert() only checks the type pair, and a
+            // failed in-place convert() clears the value to a default (e.g.
+            // "junk" -> uint 0), silently calling the method with garbage.
+            // On value-level failure keep the original argument so the
+            // remote rejects the mistyped call and the caller sees an error.
+            QVariant converted = args[p];
+            if (converted.convert(target))
+                args[p] = converted;
         }
         return;
     }
