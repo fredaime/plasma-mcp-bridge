@@ -168,6 +168,18 @@ QString CallPolicy::refusal(const PolicyDecision &decision)
         .arg(rule.mid(8)); // after "builtin:"
 }
 
+QString CallPolicy::auditLine(const CallTarget &target, const PolicyDecision &decision)
+{
+    QString line = QStringLiteral("plasma-mcp-bridge: audit: %1 %2 %3 %4 %5.%6")
+                       .arg(decision.allowed ? QStringLiteral("allow") : QStringLiteral("deny"),
+                            target.bus, target.service, target.path,
+                            target.interface.isEmpty() ? QStringLiteral("*") : target.interface,
+                            target.method);
+    if (!decision.rule.isEmpty())
+        line += QLatin1Char(' ') + decision.rule;
+    return line;
+}
+
 bool CallPolicy::systemBusAllowed() const
 {
     return m_allowSystemBus;

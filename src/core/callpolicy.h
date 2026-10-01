@@ -56,6 +56,10 @@ public:
 
     // Error text returned to the agent for a refused call.
     static QString refusal(const PolicyDecision &decision);
+    // "plasma-mcp-bridge: audit: <allow|deny> <bus> <service> <path>
+    // <interface>.<method>[ <rule>]", interface "*" when unknown. The tool
+    // has checked that no name contains a space or a line break.
+    static QString auditLine(const CallTarget &target, const PolicyDecision &decision);
     // SERVICE:INTERFACE.METHOD patterns; '*' matches any run of characters.
     static QStringList builtinDenylist();
 

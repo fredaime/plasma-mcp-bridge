@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """dbus_call guard rails: bus selection, built-in denylist, user rules, audit, startup."""
 import os
+import re
 import subprocess
 import unittest
 
@@ -239,6 +240,86 @@ class Startup(unittest.TestCase):
                     self.assertEqual(result.returncode, 2, result.stderr)
                     self.assertEqual(result.stdout, b'')
                     self.assertIn(('invalid %s pattern' % flag).encode(), result.stderr)
+
+
+AUDIT = 'plasma-mcp-bridge: audit: '
+AUDIT_LINE = re.compile('^' + re.escape(AUDIT) + '.*$', re.MULTILINE)
+RET_VOID = 'org.plasmamcp.Validation /Echo org.plasmamcp.Validation.RetVoid'
+ECHO_RULE = 'org.plasmamcp.Validation:*.RetVoid'
+
+
+class Audit(PolicyTestCase):
+
+    def audited(self, session):
+        return AUDIT_LINE.findall(session.stderr_text())
+
+    def test_allowed_call(self):
+        session = self.bridge()
+        session.call('dbus_call', dict(ECHO, method='RetVoid'))
+        self.assertEqual(self.audited(session), [AUDIT + 'allow session ' + RET_VOID])
+
+    def test_resolved_interface(self):
+        session = self.bridge()
+        session.call('dbus_call', {'service': ECHO['service'], 'path': ECHO['path'],
+                                   'method': 'RetVoid'})
+        self.assertEqual(self.audited(session), [AUDIT + 'allow session ' + RET_VOID])
+
+    def test_unknown_interface_is_a_star(self):
+        session = self.bridge()
+        session.call('dbus_call', {'service': ECHO['service'], 'path': ECHO['path'],
+                                   'method': 'Dup', 'args': [5]})
+        self.assertEqual(self.audited(session),
+                         [AUDIT + 'allow session org.plasmamcp.Validation /Echo *.Dup'])
+
+    def test_deny_rule(self):
+        session = self.bridge('--deny', ECHO_RULE)
+        session.call('dbus_call', dict(ECHO, method='RetVoid'))
+        self.assertEqual(self.audited(session),
+                         [AUDIT + 'deny session ' + RET_VOID + ' deny:' + ECHO_RULE])
+
+    def test_allow_rule(self):
+        session = self.bridge('--allow', ECHO_RULE)
+        session.call('dbus_call', dict(ECHO, method='RetVoid'))
+        self.assertEqual(self.audited(session),
+                         [AUDIT + 'allow session ' + RET_VOID + ' allow:' + ECHO_RULE])
+
+    def test_system_bus_refusal(self):
+        session = self.bridge()
+        session.call('dbus_call', dict(ECHO, bus='system', method='RetVoid'))
+        self.assertEqual(self.audited(session),
+                         [AUDIT + 'deny system ' + RET_VOID + ' system-bus'])
+
+    def test_one_line_per_call(self):
+        session = self.bridge()
+        session.call('dbus_call', dict(ECHO, method='RetVoid'))
+        session.call('dbus_call', dict(ECHO, method='RetVoid'))
+        self.assertEqual(len(self.audited(session)), 2)
+
+    def test_read_only_tools_are_not_audited(self):
+        session = self.bridge()
+        session.call('dbus_list_services')
+        session.call('dbus_introspect', {'service': ECHO['service'], 'path': ECHO['path']})
+        self.assertEqual(self.audited(session), [])
+
+    def test_invalid_calls_are_not_audited(self):
+        session = self.bridge()
+        session.call('dbus_call', {'service': ECHO['service'], 'path': ECHO['path']})
+        session.call('dbus_call', dict(ECHO, bus='sytem', method='RetVoid'))
+        self.assertEqual(self.audited(session), [])
+
+    def test_names_cannot_forge_audit_lines(self):
+        session = self.bridge()
+        forged = 'RetVoid\n' + AUDIT + 'allow session x /x x.x'
+        for field in ('service', 'path', 'interface', 'method'):
+            with self.subTest(field=field):
+                arguments = dict(ECHO, method='RetVoid')
+                arguments[field] = forged
+                reply = session.call('dbus_call', arguments)
+                self.assertTrue(reply.is_error, reply.text)
+                self.assertIn('may only contain the characters D-Bus allows', reply.text)
+        reply = session.call('dbus_call', dict(ECHO, method='Ret Void'))
+        self.assertIn('may only contain the characters D-Bus allows', reply.text)
+        self.assertEqual(self.audited(session), [])
 
 
 if __name__ == '__main__':

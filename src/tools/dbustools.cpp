@@ -9,6 +9,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 
+#include <cctype>
+#include <cstdio>
+#include <cstring>
+
 namespace {
 
 QString stringify(const QJsonValue &value)
@@ -61,6 +65,33 @@ QString selectBus(const QJsonObject &arguments, const CallPolicy *policy, QStrin
     if (*bus == QLatin1String("system") && !policy->systemBusAllowed())
         return CallPolicy::refusal(PolicyDecision{false, QStringLiteral("system-bus")});
     return QString();
+}
+
+// Letters, digits, '_' and the characters of `extra`: what D-Bus allows in
+// bus names (".-:"), object paths ("/"), interfaces (".") and members ("").
+// Checked before the policy and the audit log see a call, so a name can
+// neither forge an audit line nor dodge a rule with odd characters.
+bool nameCharactersOnly(const QString &text, const char *extra)
+{
+    for (const QChar c : text) {
+        if (c.unicode() >= 128)
+            return false;
+        const char ch = char(c.unicode());
+        if (ch == '\0')
+            return false;
+        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_' && !std::strchr(extra, ch))
+            return false;
+    }
+    return true;
+}
+
+// Straight to stderr, not through Qt's logging: QT_LOGGING_RULES must not be
+// able to silence the audit.
+void writeAudit(const QString &line)
+{
+    const QByteArray bytes = line.toUtf8() + '\n';
+    std::fwrite(bytes.constData(), 1, size_t(bytes.size()), stderr);
+    std::fflush(stderr);
 }
 
 QJsonObject busProperty()
@@ -229,6 +260,12 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
     if (service.isEmpty() || path.isEmpty() || method.isEmpty())
         return ToolResult::failure(QStringLiteral("'service', 'path' and 'method' are required"));
 
+    if (!nameCharactersOnly(service, ".-:") || !nameCharactersOnly(path, "/")
+        || !nameCharactersOnly(interface, ".") || !nameCharactersOnly(method, ""))
+        return ToolResult::failure(QStringLiteral(
+            "'service', 'path', 'interface' and 'method' may only contain the characters D-Bus "
+            "allows in names"));
+
     // The policy judges the interface the call will carry. Without one, the
     // introspection data may name it; the call is then sent with that
     // interface explicitly, so what is checked is what is sent.
@@ -240,6 +277,7 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
             target.interface = resolution.interface;
     }
     const PolicyDecision decision = m_policy->evaluate(target);
+    writeAudit(CallPolicy::auditLine(target, decision));
     if (!decision.allowed)
         return ToolResult::failure(CallPolicy::refusal(decision));
 
