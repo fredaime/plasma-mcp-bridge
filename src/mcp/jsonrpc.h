@@ -17,4 +17,8 @@ QJsonObject makeResult(const QJsonValue &id, const QJsonValue &result);
 QJsonObject makeError(const QJsonValue &id, int code, const QString &message,
                       const QJsonValue &data = QJsonValue());
 
+// The id as compact JSON (7, "a"): keeps 1 and "1" apart as a key, and is
+// what log lines print.
+QString idText(const QJsonValue &id);
+
 } // namespace mcp::jsonrpc

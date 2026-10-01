@@ -18,9 +18,11 @@ public:
 
 private:
     void onMessage(const QJsonObject &message);
+    void onInvalidFrame(int code);
     void handleInitialize(const QJsonValue &id, const QJsonObject &params);
     void handleToolsList(const QJsonValue &id);
-    void handleToolsCall(const QJsonValue &id, const QJsonObject &params);
+    void handleToolsCall(const QJsonValue &id, const QJsonValue &params);
+    void sendToolResult(const QJsonValue &id, const QString &text, bool isError);
 
     StdioTransport *m_transport;
     ToolRegistry *m_registry;

@@ -29,6 +29,7 @@ set(_tests
     test_call_path
     test_coercion
     test_policy
+    test_protocol
 )
 
 foreach(_test IN LISTS _tests)

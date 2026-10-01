@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "mcp/stdiotransport.h"
 
+#include "mcp/jsonrpc.h"
+
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSocketNotifier>
@@ -44,9 +46,14 @@ void StdioTransport::onReadable()
 
         QJsonParseError parseError;
         const QJsonDocument doc = QJsonDocument::fromJson(line, &parseError);
-        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-            qWarning("plasma-mcp-bridge: dropping invalid JSON-RPC frame: %s",
-                     parseError.errorString().toUtf8().constData());
+        if (parseError.error != QJsonParseError::NoError) {
+            qInfo("plasma-mcp-bridge: invalid JSON frame: %s",
+                  qUtf8Printable(parseError.errorString()));
+            Q_EMIT invalidFrame(mcp::jsonrpc::ParseError);
+            continue;
+        }
+        if (!doc.isObject()) {
+            Q_EMIT invalidFrame(mcp::jsonrpc::InvalidRequest);
             continue;
         }
         Q_EMIT messageReceived(doc.object());

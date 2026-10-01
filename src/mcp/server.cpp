@@ -2,31 +2,16 @@
 #include "mcp/server.h"
 
 #include "mcp/jsonrpc.h"
+#include "mcp/protocolversion.h"
 #include "mcp/stdiotransport.h"
 #include "mcp/tool.h"
 #include "mcp/toolregistry.h"
 
 #include <QJsonArray>
-#include <QStringList>
 
 #ifndef PLASMA_MCP_BRIDGE_VERSION
 #define PLASMA_MCP_BRIDGE_VERSION "0.0.0"
 #endif
-
-namespace {
-// Last protocol revision this server is known to speak. When a client asks
-// for a version we recognise we echo it back; otherwise we fall back to this.
-constexpr auto kDefaultProtocolVersion = "2024-11-05";
-
-// The set of protocol revisions this server actually understands. A client
-// may request any of these and have it echoed back; anything else negotiates
-// down to kDefaultProtocolVersion.
-bool isSupportedProtocolVersion(const QString &version)
-{
-    static const QStringList supported = {QLatin1String(kDefaultProtocolVersion)};
-    return supported.contains(version);
-}
-} // namespace
 
 Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *parent)
     : QObject(parent)
@@ -34,47 +19,66 @@ Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *paren
     , m_registry(registry)
 {
     connect(m_transport, &StdioTransport::messageReceived, this, &Server::onMessage);
+    connect(m_transport, &StdioTransport::invalidFrame, this, &Server::onInvalidFrame);
+}
+
+void Server::onInvalidFrame(int code)
+{
+    m_transport->send(mcp::jsonrpc::makeError(
+        QJsonValue(), code,
+        code == mcp::jsonrpc::ParseError
+            ? QStringLiteral("Parse error")
+            : QStringLiteral("Invalid request: a frame must be one JSON-RPC object (batches "
+                             "are not supported)")));
 }
 
 void Server::onMessage(const QJsonObject &message)
 {
-    const QString method = message.value(QStringLiteral("method")).toString();
+    const QJsonValue method = message.value(QStringLiteral("method"));
     const QJsonValue id = message.value(QStringLiteral("id"));
-    const bool isRequest = !id.isUndefined() && !id.isNull();
-    const QJsonObject params = message.value(QStringLiteral("params")).toObject();
 
-    if (method.isEmpty())
-        return; // A response or malformed frame; nothing to dispatch.
-
-    if (method == QLatin1String("notifications/initialized")) {
-        // Client handshake complete. No per-connection state to track, and a
-        // notification must never be answered, so just accept it.
+    if (!message.contains(QStringLiteral("method"))
+        && (message.contains(QStringLiteral("result"))
+            || message.contains(QStringLiteral("error")))) {
+        // This server sends no requests: a response from the client is stray.
+        qInfo("plasma-mcp-bridge: ignoring a JSON-RPC response from the client (id %s)",
+              qUtf8Printable(mcp::jsonrpc::idText(id)));
         return;
     }
 
-    if (!isRequest)
-        return; // Any other notification we don't handle: ignore, per JSON-RPC.
+    const bool hasId = message.contains(QStringLiteral("id"));
+    const bool validId = id.isString() || id.isDouble();
+    if (!method.isString() || method.toString().isEmpty() || (hasId && !validId)) {
+        m_transport->send(mcp::jsonrpc::makeError(
+            validId ? id : QJsonValue(), mcp::jsonrpc::InvalidRequest,
+            QStringLiteral("Invalid request: 'method' must be a non-empty string and 'id' a "
+                           "string or a number")));
+        return;
+    }
 
-    if (method == QLatin1String("initialize")) {
-        handleInitialize(id, params);
-    } else if (method == QLatin1String("ping")) {
+    const QString name = method.toString();
+    const QJsonValue params = message.value(QStringLiteral("params"));
+    if (!hasId)
+        return; // notifications/initialized and every other notification: nothing to do.
+
+    if (name == QLatin1String("initialize")) {
+        handleInitialize(id, params.toObject());
+    } else if (name == QLatin1String("ping")) {
         m_transport->send(mcp::jsonrpc::makeResult(id, QJsonObject{}));
-    } else if (method == QLatin1String("tools/list")) {
+    } else if (name == QLatin1String("tools/list")) {
         handleToolsList(id);
-    } else if (method == QLatin1String("tools/call")) {
+    } else if (name == QLatin1String("tools/call")) {
         handleToolsCall(id, params);
     } else {
         m_transport->send(mcp::jsonrpc::makeError(
-            id, mcp::jsonrpc::MethodNotFound,
-            QStringLiteral("Method not found: %1").arg(method)));
+            id, mcp::jsonrpc::MethodNotFound, QStringLiteral("Method not found: %1").arg(name)));
     }
 }
 
 void Server::handleInitialize(const QJsonValue &id, const QJsonObject &params)
 {
-    QString protocolVersion = params.value(QStringLiteral("protocolVersion")).toString();
-    if (!isSupportedProtocolVersion(protocolVersion))
-        protocolVersion = QLatin1String(kDefaultProtocolVersion);
+    const QString protocolVersion =
+        mcp::negotiateProtocolVersion(params.value(QStringLiteral("protocolVersion")));
 
     QJsonObject toolsCapability;
     toolsCapability.insert(QStringLiteral("listChanged"), false);
@@ -100,27 +104,39 @@ void Server::handleToolsList(const QJsonValue &id)
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }
 
-void Server::handleToolsCall(const QJsonValue &id, const QJsonObject &params)
+void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
 {
-    const QString name = params.value(QStringLiteral("name")).toString();
-    const QJsonObject arguments = params.value(QStringLiteral("arguments")).toObject();
-
-    Tool *tool = m_registry->find(name);
-    if (!tool) {
+    const QJsonValue name = params.toObject().value(QStringLiteral("name"));
+    const QJsonValue arguments = params.toObject().value(QStringLiteral("arguments"));
+    if (!params.isObject() || !name.isString()
+        || !(arguments.isUndefined() || arguments.isNull() || arguments.isObject())) {
         m_transport->send(mcp::jsonrpc::makeError(
-            id, mcp::jsonrpc::InvalidParams, QStringLiteral("Unknown tool: %1").arg(name)));
+            id, mcp::jsonrpc::InvalidParams,
+            QStringLiteral("tools/call takes {\"name\": string, \"arguments\": object}")));
         return;
     }
 
-    const ToolResult toolResult = tool->call(arguments);
+    Tool *tool = m_registry->find(name.toString());
+    if (!tool) {
+        m_transport->send(mcp::jsonrpc::makeError(
+            id, mcp::jsonrpc::InvalidParams,
+            QStringLiteral("Unknown tool: %1").arg(name.toString())));
+        return;
+    }
 
+    const ToolResult result = tool->call(arguments.toObject());
+    sendToolResult(id, result.text, result.isError);
+}
+
+void Server::sendToolResult(const QJsonValue &id, const QString &text, bool isError)
+{
     QJsonObject content;
     content.insert(QStringLiteral("type"), QStringLiteral("text"));
-    content.insert(QStringLiteral("text"), toolResult.text);
+    content.insert(QStringLiteral("text"), text);
 
     QJsonObject result;
     result.insert(QStringLiteral("content"), QJsonArray{content});
-    result.insert(QStringLiteral("isError"), toolResult.isError);
+    result.insert(QStringLiteral("isError"), isError);
 
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }

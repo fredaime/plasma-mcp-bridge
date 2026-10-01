@@ -21,6 +21,9 @@ public:
 
 Q_SIGNALS:
     void messageReceived(const QJsonObject &message);
+    // A line that is not valid JSON (ParseError) or not a JSON object, such
+    // as a batch (InvalidRequest); codes from mcp/jsonrpc.h.
+    void invalidFrame(int code);
     void closed();
 
 private:
