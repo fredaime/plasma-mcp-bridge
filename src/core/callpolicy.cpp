@@ -90,21 +90,37 @@ CallPolicy::CallPolicy()
 
 bool CallPolicy::configure(const Options &options, QString *error)
 {
-    Q_UNUSED(error); // no option can be invalid yet
+    const auto parseAll = [error](const QStringList &texts, const char *option,
+                                  QVector<Pattern> *out) {
+        for (const QString &text : texts) {
+            Pattern pattern;
+            if (!parsePattern(text, &pattern)) {
+                *error = QStringLiteral("invalid %1 pattern '%2': expected "
+                                        "SERVICE:INTERFACE.METHOD")
+                             .arg(QLatin1String(option), text);
+                return false;
+            }
+            out->append(pattern);
+        }
+        return true;
+    };
+    QVector<Pattern> deny;
+    QVector<Pattern> allow;
+    if (!parseAll(options.deny, "--deny", &deny) || !parseAll(options.allow, "--allow", &allow))
+        return false;
     m_allowSystemBus = options.allowSystemBus;
+    m_allowUniqueNames = options.allowUniqueNames;
+    m_defaultDeny = options.defaultDeny;
+    m_deny = deny;
+    m_allow = allow;
     return true;
-}
-
-bool CallPolicy::systemBusAllowed() const
-{
-    return m_allowSystemBus;
 }
 
 bool CallPolicy::destinationAllowed(const QString &bus, const QString &service) const
 {
     if (bus == QLatin1String("system") && !m_allowSystemBus)
         return false;
-    return !service.startsWith(QLatin1Char(':'));
+    return m_allowUniqueNames || !service.startsWith(QLatin1Char(':'));
 }
 
 PolicyDecision CallPolicy::evaluate(const CallTarget &target) const
@@ -113,12 +129,22 @@ PolicyDecision CallPolicy::evaluate(const CallTarget &target) const
         return {false, QStringLiteral("system-bus")};
     // Otherwise the denylist could be bypassed with the unique name that
     // dbus_list_services shows.
-    if (target.service.startsWith(QLatin1Char(':')))
+    if (target.service.startsWith(QLatin1Char(':')) && !m_allowUniqueNames)
         return {false, QStringLiteral("unique-name")};
+    for (const Pattern &pattern : m_deny) {
+        if (matches(pattern, target, true))
+            return {false, QStringLiteral("deny:") + pattern.text};
+    }
+    for (const Pattern &pattern : m_allow) {
+        if (matches(pattern, target, false))
+            return {true, QStringLiteral("allow:") + pattern.text};
+    }
     for (const Pattern &pattern : m_builtin) {
         if (matches(pattern, target, true))
             return {false, QStringLiteral("builtin:") + pattern.text};
     }
+    if (m_defaultDeny)
+        return {false, QStringLiteral("default-deny")};
     return {true, QString()};
 }
 
@@ -132,9 +158,19 @@ QString CallPolicy::refusal(const PolicyDecision &decision)
         return QStringLiteral("Refused by policy: a unique connection name (:N.M) is not "
                               "accepted as destination; use the service's well-known name (or "
                               "start plasma-mcp-bridge with --allow-unique-names)");
+    if (rule == QLatin1String("default-deny"))
+        return QStringLiteral("Refused by policy: --default-deny is set and no --allow pattern "
+                              "matches");
+    if (rule.startsWith(QLatin1String("deny:")))
+        return QStringLiteral("Refused by policy: --deny %1").arg(rule.mid(5));
     return QStringLiteral("Refused by policy: built-in denylist entry %1 (give 'interface' and "
                           "start plasma-mcp-bridge with --allow %1 to permit it)")
         .arg(rule.mid(8)); // after "builtin:"
+}
+
+bool CallPolicy::systemBusAllowed() const
+{
+    return m_allowSystemBus;
 }
 
 QStringList CallPolicy::builtinDenylist()

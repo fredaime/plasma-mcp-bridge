@@ -72,10 +72,36 @@ int main(int argc, char *argv[])
         QStringLiteral("Let the D-Bus tools reach the system bus (refused by default)."));
     parser.addOption(allowSystemBusOption);
 
+    QCommandLineOption denyOption(QStringLiteral("deny"),
+        QStringLiteral("Refuse dbus_call to SERVICE:INTERFACE.METHOD ('*' matches any run of "
+                       "characters). May be repeated."),
+        QStringLiteral("pattern"));
+    parser.addOption(denyOption);
+
+    QCommandLineOption allowOption(QStringLiteral("allow"),
+        QStringLiteral("Permit dbus_call to SERVICE:INTERFACE.METHOD although the built-in "
+                       "denylist refuses it; with --default-deny, the only calls permitted. "
+                       "May be repeated."),
+        QStringLiteral("pattern"));
+    parser.addOption(allowOption);
+
+    QCommandLineOption defaultDenyOption(QStringLiteral("default-deny"),
+        QStringLiteral("Refuse every dbus_call that no --allow pattern matches."));
+    parser.addOption(defaultDenyOption);
+
+    QCommandLineOption allowUniqueNamesOption(QStringLiteral("allow-unique-names"),
+        QStringLiteral("Accept unique connection names (:N.M) as dbus_call destination. "
+                       "The denylist does not see through them."));
+    parser.addOption(allowUniqueNamesOption);
+
     parser.process(app);
 
     CallPolicy::Options policyOptions;
     policyOptions.allowSystemBus = parser.isSet(allowSystemBusOption);
+    policyOptions.allowUniqueNames = parser.isSet(allowUniqueNamesOption);
+    policyOptions.defaultDeny = parser.isSet(defaultDenyOption);
+    policyOptions.deny = parser.values(denyOption);
+    policyOptions.allow = parser.values(allowOption);
     CallPolicy policy;
     QString policyError;
     if (!policy.configure(policyOptions, &policyError)) {

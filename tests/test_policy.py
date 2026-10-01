@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: MIT
 """dbus_call guard rails: bus selection, built-in denylist, user rules, audit, startup."""
+import os
+import subprocess
 import unittest
 
 import dbus
 
 from fixtures.trap_services import (DECOY, DENIED, HIDDEN_PATH, LOGIN1, LOGIN1_MANAGER,
                                     LOGIN1_PATH, SYSTEMD1, SYSTEMD1_PATH, TRAP)
-from mcp_session import ECHO, FixtureTestCase
-
+from mcp_session import ECHO, FixtureTestCase, require_private_bus
 
 class PolicyTestCase(FixtureTestCase):
 
@@ -138,6 +139,106 @@ class BuiltinDenylist(TrapTestCase):
                                                   'interface': LOGIN1_MANAGER, 'method': method})
                 self.assertRefused(reply, '--allow-unique-names')
         self.assertEqual(self.calls(), [])
+
+
+MANAGER_POWEROFF = LOGIN1 + ':' + LOGIN1_MANAGER + '.PowerOff'
+CAN_POWEROFF = LOGIN1 + ':' + LOGIN1_MANAGER + '.CanPowerOff'
+
+
+class UserRules(TrapTestCase):
+
+    def test_allow_lifts_a_builtin_entry(self):
+        reply = self.login1('PowerOff', '--allow', MANAGER_POWEROFF, interface=LOGIN1_MANAGER)
+        self.assertEqual(reply, ('called', False))
+        self.assertEqual(self.calls(), [LOGIN1_PATH + '|' + LOGIN1_MANAGER + '|PowerOff'])
+
+    def test_allow_does_not_match_an_unknown_interface(self):
+        # Without 'interface', PowerOff is ambiguous: the rule names an interface.
+        self.assertRefused(self.login1('PowerOff', '--allow', MANAGER_POWEROFF),
+                           'built-in denylist entry')
+        self.assertEqual(self.calls(), [])
+
+    def test_allow_with_any_interface_matches_an_unknown_interface(self):
+        reply = self.login1('PowerOff', '--allow', LOGIN1 + ':*.PowerOff')
+        self.assertFalse(reply.is_error, reply.text)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_deny_beats_allow(self):
+        reply = self.login1('CanPowerOff', '--deny', CAN_POWEROFF, '--allow', CAN_POWEROFF)
+        self.assertRefused(reply, '--deny ' + CAN_POWEROFF)
+        self.assertEqual(self.calls(), [])
+
+    def test_deny_wildcard(self):
+        bridge = self.bridge('--deny', LOGIN1 + ':' + LOGIN1_MANAGER + '.Can*')
+        reply = bridge.call('dbus_call', {'service': LOGIN1, 'path': LOGIN1_PATH,
+                                          'method': 'CanPowerOff'})
+        self.assertRefused(reply, '--deny ' + LOGIN1 + ':' + LOGIN1_MANAGER + '.Can*')
+        reply = bridge.call('dbus_call', {'service': SYSTEMD1, 'path': SYSTEMD1_PATH,
+                                          'method': 'GetDefaultTarget'})
+        self.assertEqual(reply, ('graphical.target', False))
+
+    def test_deny_matches_an_unknown_interface(self):
+        # Ping is declared by the Manager and by the decoy.
+        reply = self.login1('Ping', '--deny', LOGIN1 + ':' + LOGIN1_MANAGER + '.Ping')
+        self.assertRefused(reply, '--deny')
+        self.assertEqual(self.calls(), [])
+
+    def test_patterns_are_case_sensitive(self):
+        reply = self.login1('CanPowerOff', '--deny', LOGIN1 + ':' + LOGIN1_MANAGER + '.canpoweroff')
+        self.assertEqual(reply, ('yes', False))
+
+    def test_default_deny_permits_only_allowed_calls(self):
+        bridge = self.bridge('--default-deny', '--allow', CAN_POWEROFF)
+        reply = bridge.call('dbus_call', {'service': LOGIN1, 'path': LOGIN1_PATH,
+                                          'method': 'CanPowerOff'})
+        self.assertEqual(reply, ('yes', False))
+        reply = bridge.call('dbus_call', {'service': SYSTEMD1, 'path': SYSTEMD1_PATH,
+                                          'method': 'GetDefaultTarget'})
+        self.assertRefused(reply, '--default-deny')
+        reply = bridge.call('dbus_call', {'service': LOGIN1, 'path': LOGIN1_PATH,
+                                          'interface': LOGIN1_MANAGER, 'method': 'PowerOff'})
+        self.assertRefused(reply, 'built-in denylist entry')
+        self.assertEqual(self.calls(), [LOGIN1_PATH + '|' + LOGIN1_MANAGER + '|CanPowerOff'])
+
+    def test_default_deny_leaves_discovery(self):
+        bridge = self.bridge('--default-deny')
+        self.assertIn(LOGIN1, bridge.call_json('dbus_list_services'))
+        reply = bridge.call('dbus_introspect', {'service': LOGIN1, 'path': LOGIN1_PATH})
+        self.assertFalse(reply.is_error, reply.text)
+        reply = bridge.call('dbus_call', {'service': LOGIN1, 'path': LOGIN1_PATH,
+                                          'method': 'CanPowerOff'})
+        self.assertRefused(reply, '--default-deny')
+
+    def test_allow_unique_names(self):
+        owner = str(dbus.SessionBus().get_name_owner(LOGIN1))
+        reply = self.bridge('--allow-unique-names').call('dbus_call', {
+            'service': owner, 'path': LOGIN1_PATH, 'interface': LOGIN1_MANAGER,
+            'method': 'CanPowerOff'})
+        self.assertEqual(reply, ('yes', False))
+
+
+def run_bridge(*args):
+    """Runs the bridge with an empty stdin and returns the CompletedProcess."""
+    return subprocess.run([os.environ['PLASMA_MCP_BRIDGE'], *args], stdin=subprocess.DEVNULL,
+                          capture_output=True, timeout=10)
+
+
+class Startup(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        require_private_bus()
+
+    def test_malformed_patterns_exit_2(self):
+        for flag in ('--deny', '--allow'):
+            for pattern in ('', 'org.kde.KWin', 'org.kde.KWin:loadScript',
+                            ':org.kde.kwin.Scripting.loadScript',
+                            'org.kde.KWin:org.kde.kwin.Scripting.', 'org.kde.KWin:.loadScript'):
+                with self.subTest(flag=flag, pattern=pattern):
+                    result = run_bridge(flag, pattern)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertEqual(result.stdout, b'')
+                    self.assertIn(('invalid %s pattern' % flag).encode(), result.stderr)
 
 
 if __name__ == '__main__':
