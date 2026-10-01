@@ -73,10 +73,14 @@ de son nom sur le bus avant de rendre la main.
 
 ### 3.2 Compilation et CI
 
-- `add_compile_definitions(QT_WARN_DEPRECATED_UP_TO=0x060400 QT_DISABLE_DEPRECATED_UP_TO=0x060400)` :
+- `add_compile_definitions(QT_WARN_DEPRECATED_UP_TO=0x060400 QT_DEPRECATED_WARNINGS_SINCE=0x060400)` :
   mêmes avertissements en 6.4 (CI) et 6.11 ; pas de `qAsConst`, `_qs`, `Q_FOREACH`.
+  (`QT_WARN_DEPRECATED_UP_TO` est le nom Qt ≥ 6.5, `QT_DEPRECATED_WARNINGS_SINCE` celui de Qt 6.4.
+  `QT_DISABLE_DEPRECATED_UP_TO` n'existe qu'à partir de Qt 6.5 : il n'est pas utilisé, les API
+  dépréciées restent signalées par un avertissement, donc bloquées par `-Werror`.)
 - CI `ubuntu-24.04` : ajouter `dbus-daemon python3-dbus python3-gi` et une étape
-  `ctest --test-dir build --output-on-failure` ; le smoke test existant reste.
+  `ctest --test-dir build --output-on-failure --no-tests=error` (une suite désactivée faute de
+  dépendances ne doit pas donner une CI verte) ; le smoke test existant reste.
 - Mesures de référence : build 29 s ; ctest du socle ≈ 2,4 s.
 
 ## 4. Sous-projet A — marshalling
