@@ -104,16 +104,31 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
     // rejects a mismatch itself).
     const bool typed = resolution.state == MethodResolution::Unique
         && resolution.inSignature.size() == args.size();
+    // Properties.Set(s, s, v): the variant takes the type the target interface
+    // declares for the property, unless the caller forced one with "@dbus".
+    QJsonArray callArgs = args;
+    if (typed && resolution.interface == QLatin1String("org.freedesktop.DBus.Properties")
+        && method == QLatin1String("Set")
+        && resolution.inSignature
+            == QStringList{QStringLiteral("s"), QStringLiteral("s"), QStringLiteral("v")}
+        && !(args.at(2).isObject()
+             && args.at(2).toObject().contains(QStringLiteral("@dbus")))) {
+        const QString type = propertyTypeFromXml(resolution.introspection,
+                                                 args.at(0).toString(), args.at(1).toString());
+        if (!type.isEmpty())
+            callArgs[2] = QJsonObject{{QStringLiteral("@dbus"), type},
+                                      {QStringLiteral("value"), args.at(2)}};
+    }
     QVariantList variantArgs;
     variantArgs.reserve(args.size());
     for (int i = 0; i < args.size(); ++i) {
         if (!typed) {
-            variantArgs.append(jsonToVariant(args.at(i)));
+            variantArgs.append(jsonToVariant(callArgs.at(i)));
             continue;
         }
         QVariant value;
         QString error;
-        if (!TypeCoercer::coerce(args.at(i), resolution.inSignature.at(i), &value, &error))
+        if (!TypeCoercer::coerce(callArgs.at(i), resolution.inSignature.at(i), &value, &error))
             return DBusResult::failure(QStringLiteral("argument %1 (%2): %3")
                                            .arg(i).arg(resolution.inSignature.at(i), error));
         variantArgs.append(value);

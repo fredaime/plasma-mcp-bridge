@@ -81,5 +81,36 @@ MethodResolution resolveMethod(const QDBusConnection &bus, const QString &servic
         }
         return result; // Unavailable
     }
-    return resolveMethodFromXml(reply.arguments().first().toString(), interface, method);
+    const QString xml = reply.arguments().first().toString();
+    MethodResolution result = resolveMethodFromXml(xml, interface, method);
+    result.introspection = xml;
+    return result;
+}
+
+QString propertyTypeFromXml(const QString &xml, const QString &interface,
+                            const QString &property)
+{
+    QString currentInterface;
+    int nodeDepth = 0; // 1 = the introspected object; deeper = child descriptions
+    QXmlStreamReader reader(xml);
+    while (!reader.atEnd()) {
+        reader.readNext();
+        if (reader.isStartElement() && reader.name() == QLatin1String("node")) {
+            ++nodeDepth;
+        } else if (reader.isEndElement() && reader.name() == QLatin1String("node")) {
+            --nodeDepth;
+        } else if (nodeDepth > 1) {
+            continue;
+        } else if (reader.isStartElement()) {
+            const QXmlStreamAttributes attributes = reader.attributes();
+            if (reader.name() == QLatin1String("interface"))
+                currentInterface = attributes.value(QLatin1String("name")).toString();
+            else if (reader.name() == QLatin1String("property") && currentInterface == interface
+                     && attributes.value(QLatin1String("name")) == property)
+                return attributes.value(QLatin1String("type")).toString();
+        } else if (reader.isEndElement() && reader.name() == QLatin1String("interface")) {
+            currentInterface.clear();
+        }
+    }
+    return QString();
 }

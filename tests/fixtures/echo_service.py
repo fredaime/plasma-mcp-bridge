@@ -10,6 +10,7 @@ Owns org.plasmamcp.Validation at /Echo on the private test bus.
                 Slow calls overlap); SlowBlocking(d) blocks the service.
 - org.freedesktop.DBus.Properties Set/Get/GetAll record the last Set.
 - /Loose answers EchoAny(any signature) but has no introspection data.
+- /Props: Properties.Set typed by <property> declarations; LastSet() tells what arrived.
 Prints "READY org.plasmamcp.Validation" once the name is owned.
 """
 import os
@@ -303,6 +304,44 @@ class Loose(dbus.service.Object):
         return '%s|%r' % (''.join(_wire_type(a) for a in args), list(args))
 
 
+PROPS_XML = '''<node>
+  <interface name="org.freedesktop.DBus.Properties">
+    <method name="Set">
+      <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/>
+    </method>
+  </interface>
+  <interface name="org.plasmamcp.Props">
+    <method name="LastSet"><arg type="s" direction="out"/></method>
+    <property name="Volume" type="d" access="readwrite"/>
+    <property name="Level" type="y" access="readwrite"/>
+  </interface>
+  <node name="child">
+    <interface name="org.plasmamcp.Props">
+      <property name="Level" type="s" access="readwrite"/>
+    </interface>
+  </node>
+</node>'''
+
+
+class Props(dbus.service.Object):
+    """Properties.Set whose property types exist only in the introspection
+    data (dbus-python does not declare properties itself)."""
+    last_set = 'never'
+
+    @dbus.service.method('org.freedesktop.DBus.Introspectable', in_signature='',
+                         out_signature='s')
+    def Introspect(self):
+        return PROPS_XML
+
+    @dbus.service.method(PROPS, in_signature='ssv', out_signature='', message_keyword='msg')
+    def Set(self, iface, prop, value, msg=None):
+        Props.last_set = '%s|%s.%s=%r' % (msg.get_signature(), iface, prop, value)
+
+    @dbus.service.method('org.plasmamcp.Props', in_signature='', out_signature='s')
+    def LastSet(self):
+        return Props.last_set
+
+
 def main():
     if os.environ.get('PLASMA_MCP_TEST_BUS') != os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
         sys.exit('echo_service: refusing to own names outside the private test bus '
@@ -313,6 +352,7 @@ def main():
     Echo(bus, '/Echo')
     Nested(bus, '/Nested')
     Loose(bus, '/Loose')
+    Props(bus, '/Props')
     print('READY ' + NAME, flush=True)
     GLib.MainLoop().run()
 

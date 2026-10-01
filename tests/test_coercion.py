@@ -273,6 +273,48 @@ class Variants(FixtureTestCase):
         self.assertEqual(reply, ("argument 0 (a{sv}): ['urg']: 300 out of range [0,255]", True))
 
 
+PROPS_OBJECT = {'service': ECHO['service'], 'path': '/Props'}
+
+
+class PropertiesSet(FixtureTestCase):
+
+    def set_property(self, prop, value, interface=True):
+        bridge = self.bridge()
+        arguments = dict(PROPS_OBJECT, method='Set', args=['org.plasmamcp.Props', prop, value])
+        if interface:
+            arguments['interface'] = 'org.freedesktop.DBus.Properties'
+        reply = bridge.call('dbus_call', arguments)
+        if reply.is_error:
+            return reply
+        return bridge.call('dbus_call', dict(PROPS_OBJECT, interface='org.plasmamcp.Props',
+                                             method='LastSet'))
+
+    def test_declared_double(self):
+        self.assertEqual(self.set_property('Volume', 1),
+                         ('ssv|org.plasmamcp.Props.Volume=dbus.Double(1.0, variant_level=1)',
+                          False))
+
+    def test_declared_byte(self):
+        self.assertEqual(self.set_property('Level', 2),
+                         ('ssv|org.plasmamcp.Props.Level=dbus.Byte(2, variant_level=1)', False))
+
+    def test_without_interface(self):
+        self.assertEqual(self.set_property('Level', 2, interface=False),
+                         ('ssv|org.plasmamcp.Props.Level=dbus.Byte(2, variant_level=1)', False))
+
+    def test_declared_type_is_strict(self):
+        self.assertEqual(self.set_property('Level', 300),
+                         ('argument 2 (v): 300 out of range [0,255]', True))
+
+    def test_explicit_type_wins(self):
+        self.assertEqual(self.set_property('Level', {'@dbus': 'u', 'value': 2}),
+                         ('ssv|org.plasmamcp.Props.Level=dbus.UInt32(2, variant_level=1)', False))
+
+    def test_undeclared_property_is_natural(self):
+        self.assertEqual(self.set_property('Other', 2),
+                         ('ssv|org.plasmamcp.Props.Other=dbus.Int32(2, variant_level=1)', False))
+
+
 class NaturalMapping(FixtureTestCase):
     """Without introspection data the JSON types decide (m12)."""
 
