@@ -12,10 +12,14 @@ constexpr int InvalidRequest = -32600;
 constexpr int MethodNotFound = -32601;
 constexpr int InvalidParams = -32602;
 constexpr int InternalError = -32603;
+// MCP 2026-07-28: the requested protocol version is not served
+// (data: {"supported": [...], "requested": "..."}).
+constexpr int UnsupportedProtocolVersion = -32022;
 
 QJsonObject makeResult(const QJsonValue &id, const QJsonValue &result);
 QJsonObject makeError(const QJsonValue &id, int code, const QString &message,
                       const QJsonValue &data = QJsonValue());
+QJsonObject makeNotification(const QString &method, const QJsonObject &params);
 
 // The id as compact JSON (7, "a"): keeps 1 and "1" apart as a key, and is
 // what log lines print.
