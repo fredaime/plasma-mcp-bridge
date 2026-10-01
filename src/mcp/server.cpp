@@ -82,6 +82,7 @@ void Server::shutdown()
     if (m_closing)
         return;
     m_closing = true;
+    closeSubscriptions();
     if (m_runner->inFlight() == 0) {
         Q_EMIT finished();
         return;
@@ -137,7 +138,7 @@ void Server::onMessage(const QJsonObject &message)
         handleNotification(name, params.toObject());
         return;
     }
-    if (m_runner->isInFlight(id)) {
+    if (m_runner->isInFlight(id) || m_listens.contains(mcp::jsonrpc::idText(id))) {
         // Exactly one response per id: the call already running keeps it.
         qInfo("plasma-mcp-bridge: ignoring request %s: a request with this id is still in flight",
               qUtf8Printable(mcp::jsonrpc::idText(id)));
@@ -169,6 +170,11 @@ void Server::handleNotification(const QString &method, const QJsonObject &params
     if (method != QLatin1String("notifications/cancelled"))
         return;
     const QJsonValue requestId = params.value(QStringLiteral("requestId"));
+    if (m_listens.remove(mcp::jsonrpc::idText(requestId))) {
+        qInfo("plasma-mcp-bridge: closed subscription %s",
+              qUtf8Printable(mcp::jsonrpc::idText(requestId)));
+        return;
+    }
     if (m_runner->cancel(requestId)) {
         // A cancelled call never produces a result: forget its era too.
         m_modernCalls.remove(mcp::jsonrpc::idText(requestId));
@@ -217,6 +223,8 @@ void Server::handleModernRequest(const QJsonValue &id, const QString &method,
         handleModernToolsList(id, params);
     } else if (method == QLatin1String("tools/call")) {
         handleToolsCall(id, params, true);
+    } else if (method == QLatin1String("subscriptions/listen")) {
+        handleListen(id);
     } else {
         // ping and logging/setLevel do not exist in 2026-07-28.
         m_transport->send(mcp::jsonrpc::makeError(
@@ -255,6 +263,42 @@ void Server::handleModernToolsList(const QJsonValue &id, const QJsonObject &para
     result.insert(QStringLiteral("ttlMs"), 0);
     result.insert(QStringLiteral("cacheScope"), QStringLiteral("public"));
     m_transport->send(mcp::jsonrpc::makeResult(id, modernResult(result)));
+}
+
+// The bridge has no notification to offer (its tools never change while it
+// runs): the acknowledgment lists none, and the stream stays open, without a
+// response, until the client cancels it or the bridge shuts down (D2).
+void Server::handleListen(const QJsonValue &id)
+{
+    if (m_closing)
+        return;
+    m_listens.insert(mcp::jsonrpc::idText(id), id);
+    QJsonObject meta;
+    meta.insert(QLatin1String(kMetaSubscriptionId), id);
+    QJsonObject params;
+    params.insert(QStringLiteral("_meta"), meta);
+    params.insert(QStringLiteral("notifications"), QJsonObject{});
+    m_transport->send(
+        mcp::jsonrpc::makeNotification(QStringLiteral("notifications/subscriptions/acknowledged"),
+                                       params));
+}
+
+// A completion result, then notifications/cancelled: the subscriptions page
+// asks for the first, the cancellation page for the second.
+void Server::closeSubscriptions()
+{
+    for (auto it = m_listens.cbegin(); it != m_listens.cend(); ++it) {
+        QJsonObject meta;
+        meta.insert(QLatin1String(kMetaSubscriptionId), it.value());
+        QJsonObject result;
+        result.insert(QStringLiteral("_meta"), meta);
+        m_transport->send(mcp::jsonrpc::makeResult(it.value(), modernResult(result)));
+        QJsonObject cancelled;
+        cancelled.insert(QStringLiteral("requestId"), it.value());
+        m_transport->send(
+            mcp::jsonrpc::makeNotification(QStringLiteral("notifications/cancelled"), cancelled));
+    }
+    m_listens.clear();
 }
 
 void Server::handleInitialize(const QJsonValue &id, const QJsonObject &params)

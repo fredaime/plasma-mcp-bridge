@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <QHash>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QObject>
@@ -44,6 +45,9 @@ private:
     void handleModernRequest(const QJsonValue &id, const QString &method,
                              const QJsonObject &params);
     void handleDiscover(const QJsonValue &id);
+    void handleListen(const QJsonValue &id);
+    // Graceful teardown of the open subscriptions/listen streams.
+    void closeSubscriptions();
     void handleInitialize(const QJsonValue &id, const QJsonObject &params);
     void handleToolsList(const QJsonValue &id);
     void handleToolsCall(const QJsonValue &id, const QJsonValue &params, bool modern);
@@ -55,5 +59,6 @@ private:
     ToolRunner *m_runner;
     QSet<QString> m_serializedTools;
     QSet<QString> m_modernCalls; // idText of the modern tools/call in flight
+    QHash<QString, QJsonValue> m_listens; // open subscriptions/listen, by idText
     bool m_closing = false;
 };

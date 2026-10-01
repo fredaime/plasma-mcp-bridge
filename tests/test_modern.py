@@ -158,5 +158,56 @@ class ModernTools(ModernTestCase):
         session.expect_silence(0.5)
 
 
+LISTEN = {'notifications': {'toolsListChanged': True}}
+SUBSCRIPTION_ID = 'io.modelcontextprotocol/subscriptionId'
+
+
+class Subscriptions(ModernTestCase):
+    fixtures = ()
+
+    def open_stream(self, session):
+        rid = session.start('subscriptions/listen', dict(LISTEN, _meta=meta()))
+        return rid, session.read_message()
+
+    def test_acknowledged_without_notifications(self):
+        session = self.bridge(initialize=False)
+        rid, ack = self.open_stream(session)
+        self.assertEqual(ack, {'jsonrpc': '2.0',
+                               'method': 'notifications/subscriptions/acknowledged',
+                               'params': {'_meta': {SUBSCRIPTION_ID: rid}, 'notifications': {}}})
+        session.expect_silence(0.5)
+
+    def test_client_cancel_closes_silently(self):
+        session = self.bridge(initialize=False)
+        rid, _ = self.open_stream(session)
+        session.send({'jsonrpc': '2.0', 'method': 'notifications/cancelled',
+                      'params': {'requestId': rid}})
+        session.expect_silence(0.5)
+        self.assertIn('closed subscription %d' % rid, session.stderr_text())
+        self.assertModernResult(self.modern('server/discover', session=session))
+
+    def test_duplicate_id_while_open(self):
+        session = self.bridge(initialize=False)
+        rid, _ = self.open_stream(session)
+        session.start('server/discover', {'_meta': meta()}, rid=rid)
+        session.expect_silence(0.5)
+
+    def test_shutdown_closes_the_stream(self):
+        session = self.bridge(initialize=False)
+        rid, _ = self.open_stream(session)
+        session.proc.stdin.close()
+        closing = session.read_message(timeout=2)
+        self.assertEqual(closing['id'], rid)
+        self.assertEqual(closing['result']['resultType'], 'complete')
+        self.assertEqual(closing['result']['_meta'][SUBSCRIPTION_ID], rid)
+        self.assertEqual(session.read_message(timeout=2),
+                         {'jsonrpc': '2.0', 'method': 'notifications/cancelled',
+                          'params': {'requestId': rid}})
+        self.assertEqual(session.proc.wait(timeout=3), 0)
+
+    def test_legacy_listen_is_unknown(self):
+        self.assertError(self.bridge().request('subscriptions/listen', LISTEN), -32601)
+
+
 if __name__ == '__main__':
     unittest.main()
