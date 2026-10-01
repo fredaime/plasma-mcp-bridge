@@ -14,6 +14,7 @@ add_library(plasma-mcp-bridge-core SHARED
     dbus/dbusbridge.cpp
     dbus/interfaceresolver.cpp
     dbus/typecoercer.cpp
+    core/callpolicy.cpp
     core/pluginloader.cpp
     core/skillemitter.cpp
     backends/dbusbackend.cpp

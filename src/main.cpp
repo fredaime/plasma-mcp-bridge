@@ -2,6 +2,7 @@
 #include "backends/dbusbackend.h"
 #include "backends/notificationbackend.h"
 #include "core/backend.h"
+#include "core/callpolicy.h"
 #include "core/pluginloader.h"
 #include "core/skillemitter.h"
 #include "dbus/dbusbridge.h"
@@ -23,10 +24,10 @@
 
 namespace {
 
-std::vector<std::unique_ptr<Backend>> builtinBackends()
+std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy)
 {
     std::vector<std::unique_ptr<Backend>> backends;
-    backends.push_back(std::make_unique<DBusBackend>());
+    backends.push_back(std::make_unique<DBusBackend>(policy));
     backends.push_back(std::make_unique<NotificationBackend>());
     return backends;
 }
@@ -67,14 +68,27 @@ int main(int argc, char *argv[])
                        "the currently-shipping tool surface."));
     parser.addOption(emitSkillOption);
 
+    QCommandLineOption allowSystemBusOption(QStringLiteral("allow-system-bus"),
+        QStringLiteral("Let the D-Bus tools reach the system bus (refused by default)."));
+    parser.addOption(allowSystemBusOption);
+
     parser.process(app);
+
+    CallPolicy::Options policyOptions;
+    policyOptions.allowSystemBus = parser.isSet(allowSystemBusOption);
+    CallPolicy policy;
+    QString policyError;
+    if (!policy.configure(policyOptions, &policyError)) {
+        qCritical("plasma-mcp-bridge: %s", qUtf8Printable(policyError));
+        return 2;
+    }
 
     DBusBridge bridge;
     BridgeContext context{&bridge, QStringLiteral(PLASMA_MCP_BRIDGE_VERSION)};
 
     ToolRegistry registry;
 
-    auto allBackends = builtinBackends();
+    auto allBackends = builtinBackends(&policy);
     PluginLoader loader;
     for (const QString &pluginPath : parser.values(pluginOption)) {
         auto pluginBackends = loader.load(pluginPath);

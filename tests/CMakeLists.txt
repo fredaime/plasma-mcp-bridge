@@ -28,6 +28,7 @@ set(_tests
     test_demarshall
     test_call_path
     test_coercion
+    test_policy
 )
 
 foreach(_test IN LISTS _tests)

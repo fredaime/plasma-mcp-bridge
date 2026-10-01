@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "tools/dbustools.h"
 
+#include "core/callpolicy.h"
 #include "dbus/dbusbridge.h"
 
 #include <QJsonArray>
@@ -30,6 +31,34 @@ QString stringify(const QJsonValue &value)
     default:
         return QString();
     }
+}
+
+// m5: 'bus' is "session" (also when absent or null) or "system"; anything
+// else is an error, not a silent fallback to the session bus. Returns the
+// error text, empty on success.
+QString busArgument(const QJsonObject &arguments, QString *bus)
+{
+    const QJsonValue value = arguments.value(QStringLiteral("bus"));
+    if (value.isUndefined() || value.isNull()) {
+        *bus = QStringLiteral("session");
+        return QString();
+    }
+    const QString name = value.toString();
+    if (name != QLatin1String("session") && name != QLatin1String("system"))
+        return QStringLiteral("'bus' must be \"session\" or \"system\"");
+    *bus = name;
+    return QString();
+}
+
+// busArgument, then the --allow-system-bus switch.
+QString selectBus(const QJsonObject &arguments, const CallPolicy *policy, QString *bus)
+{
+    const QString error = busArgument(arguments, bus);
+    if (!error.isEmpty())
+        return error;
+    if (*bus == QLatin1String("system") && !policy->systemBusAllowed())
+        return CallPolicy::refusal(PolicyDecision{false, QStringLiteral("system-bus")});
+    return QString();
 }
 
 QJsonObject busProperty()
@@ -79,7 +108,10 @@ QJsonObject DBusListServicesTool::inputSchema() const
 
 ToolResult DBusListServicesTool::call(const QJsonObject &arguments)
 {
-    const QString bus = arguments.value(QStringLiteral("bus")).toString(QStringLiteral("session"));
+    QString bus;
+    const QString busError = selectBus(arguments, m_policy, &bus);
+    if (!busError.isEmpty())
+        return ToolResult::failure(busError);
     const DBusResult result = m_bridge->listServices(bus);
     if (!result.ok)
         return ToolResult::failure(result.error);
@@ -120,7 +152,10 @@ QJsonObject DBusIntrospectTool::inputSchema() const
 
 ToolResult DBusIntrospectTool::call(const QJsonObject &arguments)
 {
-    const QString bus = arguments.value(QStringLiteral("bus")).toString(QStringLiteral("session"));
+    QString bus;
+    const QString busError = selectBus(arguments, m_policy, &bus);
+    if (!busError.isEmpty())
+        return ToolResult::failure(busError);
     const QString service = arguments.value(QStringLiteral("service")).toString();
     const QString path = arguments.value(QStringLiteral("path")).toString(QStringLiteral("/"));
     if (service.isEmpty())
@@ -179,7 +214,10 @@ QJsonObject DBusCallTool::inputSchema() const
 
 ToolResult DBusCallTool::call(const QJsonObject &arguments)
 {
-    const QString bus = arguments.value(QStringLiteral("bus")).toString(QStringLiteral("session"));
+    QString bus;
+    const QString busError = selectBus(arguments, m_policy, &bus);
+    if (!busError.isEmpty())
+        return ToolResult::failure(busError);
     const QString service = arguments.value(QStringLiteral("service")).toString();
     const QString path = arguments.value(QStringLiteral("path")).toString();
     const QString interface = arguments.value(QStringLiteral("interface")).toString();
