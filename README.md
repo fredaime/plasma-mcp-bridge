@@ -175,8 +175,18 @@ Discover what KWin exposes, then call it:
   "interface": "org.kde.KWin", "method": "nextDesktop", "args": [] }
 ```
 
-Any reply is marshalled back to JSON, including arrays, structs, and `a{sv}` maps.
-Byte arrays (`ay`) come back as base64-encoded strings.
+A method without return value — like `nextDesktop` above — replies `null`.
+Replies are marshalled back to JSON, including arrays, structs and maps:
+numbers are exact (a `uint64` above 2^53 comes back as a decimal string), byte
+arrays (`ay`) come back as base64 strings, and a value of a type that cannot be
+represented is replaced by `"<unsupported D-Bus type '<signature>'>"`.
+
+Arguments are converted to the types the method declares in its introspection
+data — also when `interface` is omitted, as long as the method name is unique
+on the object. Integers are range-checked (pass a `uint64` beyond the int64
+range as a decimal string), `ay` accepts an array of bytes or a base64 string,
+and a value that does not fit is rejected before anything is sent. Container
+arguments other than `as`, `ay` and `a{sv}` are not converted yet.
 
 ## Protocol
 

@@ -66,9 +66,13 @@ Layers under `src/` (include paths are rooted at `src/`, so headers are included
   `jsonToVariant` / `variantToJson` / `demarshall` marshalling helpers. The generic
   demarshaller relies on Qt's `operator>>(const QDBusArgument&, QVariant&)` and the
   const `beginArray/beginMap/beginStructure` overloads to turn arbitrary D-Bus
-  replies (arrays, structs, `a{sv}` maps) into JSON. Argument type coercion (e.g. a
-  JSON int into a uint32) happens by routing calls through `QDBusInterface` when an
-  interface name is supplied.
+  replies (arrays, structs, `a{sv}` maps) into JSON. `callMethod` introspects the
+  target object on every call (`dbus/interfaceresolver.*`, no cache) to find the
+  interface declaring the method and its input signature, converts each argument
+  to that signature (`dbus/typecoercer.*`; strict for basic types, `as`, `ay`), and
+  sends a plain `QDBusMessage::createMethodCall` with the explicit interface —
+  never `QDBusInterface`, which rejects the bus daemon and mangles void replies.
+  Both units are internal: their headers are not installed.
 
 - **`src/core/` — the provider seam (plugin ABI).**
   - `Backend` is the unit a plugin contributes: it has a `name`, a `description`,
