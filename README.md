@@ -15,13 +15,13 @@ client that can reach all of it.
 
 ## Highlights
 
-- **Universal bridge.** Call any method on any object on the session or system bus
-  — KWin scripting, plasmashell, global shortcuts, power management, media players
-  (MPRIS), portals, and more.
+- **Universal bridge.** Call any method on any object on the session bus — KWin,
+  plasmashell, global shortcuts, power management, media players (MPRIS), and
+  more — and on the system bus when you allow it.
 - **Discovery built in.** Agents can list services and read introspection XML, so
   they figure out what the desktop offers at runtime instead of being hard-coded.
 - **Not just Plasma.** The generic tools are desktop-agnostic; freedesktop
-  standards (notifications, portals, logind, MPRIS) work on any compliant desktop.
+  standards (notifications, logind, MPRIS) work on any compliant desktop.
   Only the service names are Plasma-specific.
 - **Tiny footprint.** The only hard dependency is **Qt 6 (Core + DBus)** — no KF6
   linkage, because Plasma is reached over the wire.
@@ -35,9 +35,9 @@ AI agent  ──MCP (JSON-RPC / stdio)──▶  plasma-mcp-bridge  ──D-Bus�
 
 Plasma's automation surface lives on the session bus: `org.kde.KWin`,
 `org.kde.plasmashell`, `org.kde.kglobalaccel`, `org.kde.ActivityManager`, alongside
-cross-desktop standards like `org.freedesktop.Notifications`,
-`org.freedesktop.portal.*`, and `org.mpris.MediaPlayer2.*`. Because the bridge is a
-generic D-Bus client, a single set of tools reaches all of it.
+cross-desktop standards like `org.freedesktop.Notifications` and
+`org.mpris.MediaPlayer2.*`. Because the bridge is a generic D-Bus client, a single
+set of tools reaches all of it.
 
 ## Security & trust model
 
@@ -72,6 +72,42 @@ The **Policy / identity / approval** stage is not implemented in the public core
 yet — but the diagram shows where it belongs. Every request should pass through it
 before the bridge invokes D-Bus, so that allow/deny decisions, scoping, and audit
 live in a component the model can neither reach nor rewrite.
+
+### Built-in guard rails (best effort)
+
+The bridge itself adds a few switches and a denylist of known destructive
+calls, so that an agent does not power off the machine or run code by
+mistake. **This is not a security boundary**: it covers the `dbus_call` tool
+only (not the calls plugins or the bridge itself make), it does not see
+through other names of the same service or other methods with the same
+effect, and it does not filter object paths.
+
+| By default | Switch |
+| --- | --- |
+| The system bus is refused by the three D-Bus tools | `--allow-system-bus` |
+| `dbus_call` to a unique connection name (`:1.42`) is refused — otherwise the denylist could be bypassed with the name `dbus_list_services` shows | `--allow-unique-names` |
+| A built-in denylist refuses logind power and session methods (`PowerOff*`, `Reboot*`, `Suspend*`, `Terminate*`, `KillSession`, …), systemd methods that start, kill or reconfigure units, KWin scripting, plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`, and the bus daemon's `UpdateActivationEnvironment` | `--allow SERVICE:INTERFACE.METHOD` lifts an entry |
+| Everything else is allowed | `--deny SERVICE:INTERFACE.METHOD` refuses more; `--default-deny` makes the `--allow` patterns an allowlist |
+
+Patterns read `SERVICE:INTERFACE.METHOD` (the last `.` starts the method),
+`*` matches any run of characters, and matching is case-sensitive; `--deny`
+and `--allow` may be repeated. A call is checked in this order: system bus,
+unique name, `--deny`, `--allow`, built-in denylist, `--default-deny`. When
+`interface` is omitted and the object's introspection data does not name a
+single interface for the method, the strictest reading applies: `--deny` and
+the denylist match whatever the interface, `--allow` matches only with `*` as
+interface.
+
+Every `dbus_call` that reaches these checks writes one line to stderr:
+
+```
+plasma-mcp-bridge: audit: <allow|deny> <bus> <service> <path> <interface>.<method> [rule]
+```
+
+The interface is `*` when unknown; the rule is `system-bus`, `unique-name`,
+`deny:<pattern>`, `allow:<pattern>`, `builtin:<pattern>` or `default-deny`,
+and is absent when no rule decided. A malformed pattern, or a `--plugin` that
+cannot be loaded, makes the bridge exit with code 2.
 
 ### Walkthrough
 
@@ -111,8 +147,14 @@ sudo apt-get install build-essential cmake ninja-build \
 ```sh
 cmake -S . -B build -G Ninja
 cmake --build build           # -> build/bin/plasma-mcp-bridge
-sudo cmake --install build    # installs the binary + a D-Bus service file
+sudo cmake --install build
 ```
+
+The install puts the `plasma-mcp-bridge` binary, the shared library
+`libplasma-mcp-bridge-core` it runs on, the plugin headers
+(`include/plasma-mcp-bridge/`) and the CMake package `PlasmaMcpBridge` for
+plugin authors. There is no D-Bus activation file: the MCP client starts the
+bridge (see below).
 
 ### Tests
 
@@ -141,8 +183,13 @@ configuration, e.g.:
 }
 ```
 
+Options such as `--allow-system-bus` or `--deny` go in the client's `args`
+list (see [Built-in guard rails](#built-in-guard-rails-best-effort)).
+
 At startup the bridge also claims the well-known name `org.kde.plasma.mcpbridge`
-on the session bus, so it shows up in tools like `qdbus` and D-Spy.
+on the session bus, so it shows up in tools like `qdbus` and D-Spy. Only one
+running instance holds the name (the others carry on without it), and no
+object is exported under it.
 
 ## Tools
 
@@ -188,6 +235,10 @@ range as a decimal string), `ay` accepts an array of bytes or a base64 string,
 and a value that does not fit is rejected before anything is sent. Container
 arguments other than `as`, `ay` and `a{sv}` are not converted yet.
 
+XDG desktop portals (`org.freedesktop.portal.*`) are not usable yet: a portal
+method returns a request handle and delivers its result later in a `Response`
+signal, and the bridge does not receive D-Bus signals.
+
 ## Protocol
 
 - Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout.
@@ -228,6 +279,7 @@ the skill drifts from the live tool surface.
 - Semantic UI access via the accessibility bus (AT-SPI)
 - Higher-level Plasma tools (windows, activities, shortcuts)
 - Additional desktop backends
+- Receiving D-Bus signals (portal responses, change notifications)
 
 ## Contributing
 

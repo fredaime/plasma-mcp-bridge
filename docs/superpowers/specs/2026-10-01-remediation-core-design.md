@@ -230,7 +230,7 @@ comparaison **sensible à la casse** ; le chemin d'objet n'est pas filtré.
 **Évaluation** (dans `DBusCallTool::call`, avant l'appel) :
 1. destination `:N.M` sans `--allow-unique-names` → refus ;
 2. interface = celle fournie, sinon celle du résolveur (§4.2) ; si l'état est « ambigu » ou
-   « impossible », la règle est testée sur `SERVICE:*.METHOD` (la plus stricte). Si PR5 est mergée
+   « impossible », la règle est testée sur `SERVICE:*.METHOD` (la plus stricte) : une règle de refus correspond quelle que soit l'interface, une règle `--allow` seulement si son interface est `*`. Si PR5 est mergée
    avant PR3a, le résolveur n'existe pas encore : une interface non fournie est alors traitée comme
    « impossible » ; PR3a branche ensuite le résolveur, sans changer les règles ;
 3. `--deny` correspond → refus ; 4. `--allow` correspond → accord ; 5. denylist intégrée correspond →
@@ -239,12 +239,12 @@ comparaison **sensible à la casse** ; le chemin d'objet n'est pas filtré.
 **Denylist intégrée** (noms vérifiés sur Plasma 6.7 ; revérifiés par introspection lors de la
 revalidation) :
 
-- `org.freedesktop.login1:org.freedesktop.login1.Manager.{PowerOff,Reboot,Halt,Suspend,Hibernate,HybridSleep,SuspendThenHibernate,KExec*,Terminate*,KillSession,KillUser,ScheduleShutdown,SetWallMessage}`
+- `org.freedesktop.login1:org.freedesktop.login1.Manager.{PowerOff*,Reboot*,Halt*,Suspend*,Hibernate*,HybridSleep*,Sleep*,KExec*,Terminate*,KillSession,KillUser,ScheduleShutdown,SetWallMessage}` (préfixes : variantes `*WithFlags` et `Sleep` — amendement PR5)
 - `org.kde.KWin:org.kde.kwin.Scripting.*`
 - `org.kde.ksmserver:org.kde.KSMServerInterface.{closeSession,logout*}`
 - `org.kde.Shutdown:org.kde.Shutdown.*`
 - `org.kde.plasmashell:org.kde.PlasmaShell.evaluateScript`
-- `org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.{StartTransientUnit,StartUnit,RestartUnit,ReloadOrRestartUnit,KillUnit,SetEnvironment,UnsetAndSetEnvironment,PowerOff,Reboot,Halt,KExec,Exit}` (exécution de commandes via `systemd --user`)
+- `org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.{StartUnit*,StartTransientUnit,RestartUnit,ReloadOrRestartUnit,EnqueueUnitJob,KillUnit*,SetEnvironment,UnsetAndSetEnvironment,PowerOff,Reboot,SoftReboot,Halt,KExec,Exit,SwitchRoot}` et `org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.{Start,Restart,ReloadOrRestart,Kill,EnqueueJob}` (exécution de commandes via `systemd --user` ; `StartUnitWithFlags`, `StartUnitReplace`, `EnqueueUnitJob`, `KillUnitSubgroup`, `SoftReboot`, `SwitchRoot` et l'interface `Unit` — amendement PR5)
 - `org.freedesktop.DBus:org.freedesktop.DBus.UpdateActivationEnvironment`
 
 **Emplacement.** Unité `src/core/callpolicy.{h,cpp}` (non installée), construite dans `main.cpp` et
@@ -254,6 +254,8 @@ du core et ceux des plugins n'y passent pas, et le README le précise.
 
 **Audit.** Une ligne stderr par `dbus_call` :
 `plasma-mcp-bridge: audit: <allow|deny> <bus> <service> <path> <interface>.<method> [rule]`.
+
+Les noms (`service`, `path`, `interface`, `method`) ne contenant pas que des caractères admis par D-Bus sont refusés avant la policy (amendement PR5 : une ligne d'audit ne peut pas être forgée). `bus: null` vaut `bus` absent.
 
 **m5.** La validation de `bus` se fait dans les outils (`session` ou `system`, sinon erreur
 explicite), pas dans `DBusBridge::connection()`.

@@ -26,5 +26,18 @@ class Smoke(FixtureTestCase):
         self.assertEqual(self.bridge().close(timeout=2.0), 0)
 
 
+    def test_tool_descriptions_match_the_policy(self):
+        tools = {t['name']: t for t in self.bridge().request('tools/list')['result']['tools']}
+        call = tools['dbus_call']
+        self.assertNotIn('portal', call['description'])
+        self.assertIn('--allow', call['description'])
+        self.assertNotIn('required for reliable type coercion',
+                         call['inputSchema']['properties']['interface']['description'])
+        for name in ('dbus_list_services', 'dbus_introspect', 'dbus_call'):
+            with self.subTest(tool=name):
+                self.assertIn('--allow-system-bus',
+                              tools[name]['inputSchema']['properties']['bus']['description'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -28,6 +28,26 @@ Pre-releases are versioned 0.1.90+.
   wrapped, rounded or sent as another type. Integers beyond the int64 range
   must be passed as decimal strings; `ay` accepts base64.
 - A `uint64` above 2^53 is returned as a decimal string.
+- The system bus is refused unless the bridge is started with
+  `--allow-system-bus` (all three D-Bus tools).
+- `dbus_call` refuses a built-in denylist of destructive methods (logind power
+  and session methods, systemd unit start/kill/environment, KWin scripting,
+  plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`,
+  `UpdateActivationEnvironment`) and destinations given by unique name
+  (`:N.M`). See README, "Built-in guard rails". This is not a security boundary.
+- An unknown `bus` value (e.g. `"sytem"`) is an error instead of silently
+  meaning the session bus.
+- `dbus_call` rejects service, path, interface or method names with characters
+  D-Bus does not allow.
+- A `--plugin` that cannot be loaded makes the bridge exit with code 2 (also
+  with `--emit-skill`).
 
 ### Added
 - Test-suite on a private D-Bus (`ctest`), see README.
+- `--deny`, `--allow`, `--default-deny`, `--allow-unique-names`; one audit line
+  per `dbus_call` on stderr.
+
+### Removed
+- The D-Bus activation file `org.kde.plasma.mcpbridge.service`: activating the
+  bridge started a stdio server with no client. Packagers: drop it from file
+  lists.

@@ -101,7 +101,9 @@ QJsonObject busProperty()
     bus.insert(QStringLiteral("enum"), QJsonArray{QStringLiteral("session"), QStringLiteral("system")});
     bus.insert(QStringLiteral("default"), QStringLiteral("session"));
     bus.insert(QStringLiteral("description"),
-               QStringLiteral("Which bus to use. Plasma lives on the session bus."));
+               QStringLiteral("Which bus to use: \"session\" (the default; Plasma lives there) "
+                              "or \"system\" (refused unless the bridge was started with "
+                              "--allow-system-bus)."));
     return bus;
 }
 
@@ -208,10 +210,15 @@ QString DBusCallTool::name() const
 QString DBusCallTool::description() const
 {
     return QStringLiteral(
-        "Invoke a method on any D-Bus object and return its reply. This is the universal bridge to "
-        "desktop automation: KWin window/effect scripting, plasmashell, global shortcuts, power "
-        "management, media players (MPRIS), portals, and any other service. Arguments are passed "
-        "positionally as a JSON array and coerced to the method's signature.");
+        "Invoke a method on any D-Bus object and return its reply as JSON. This is the universal "
+        "bridge to desktop automation: KWin, plasmashell, global shortcuts, power management, "
+        "media players (MPRIS) and any other service on the bus. Arguments are passed "
+        "positionally as a JSON array and converted to the types the method declares in its "
+        "introspection data: integers are range-checked, a byte array (ay) may be given as a "
+        "base64 string, a uint64 beyond the int64 range as a decimal string. A method without "
+        "return value replies null. The bridge refuses known destructive methods (power off, "
+        "logout, script execution, systemd units), the system bus and unique connection names "
+        "(:N.M) unless it was started with the matching --allow option.");
 }
 
 QJsonObject DBusCallTool::inputSchema() const
@@ -231,7 +238,8 @@ QJsonObject DBusCallTool::inputSchema() const
     properties.insert(
         QStringLiteral("interface"),
         stringProperty(QStringLiteral(
-            "Interface name, e.g. org.kde.KWin. Recommended; required for reliable type coercion.")));
+            "Interface declaring the method, e.g. org.kde.KWin. May be omitted when exactly one "
+            "interface of the object declares the method; give it to choose between several.")));
     properties.insert(QStringLiteral("method"),
                       stringProperty(QStringLiteral("Method to call, e.g. nextDesktop.")));
     properties.insert(QStringLiteral("args"), args);
