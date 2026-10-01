@@ -97,5 +97,17 @@ class Coercion(FixtureTestCase):
         self.assertTrue(self.echo('EchoAU', [1, 2]).text.startswith('av|'))
 
 
+class NaturalMapping(FixtureTestCase):
+    """Without introspection data the JSON types decide (m12)."""
+
+    def test_natural_types(self):
+        reply = self.bridge().call('dbus_call', {
+            'service': ECHO['service'], 'path': '/Loose', 'interface': ECHO['interface'],
+            'method': 'EchoAny',
+            'args': [7, -2147483648, 2147483648, 5000000000, 2.5, 'x', True, [1, 2], {'k': 1}]})
+        self.assertFalse(reply.is_error, reply.text)
+        self.assertEqual(reply.text.split('|')[0], 'iixxdsbava{sv}')
+
+
 if __name__ == '__main__':
     unittest.main()

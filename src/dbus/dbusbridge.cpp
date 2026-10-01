@@ -149,10 +149,16 @@ QVariant DBusBridge::jsonToVariant(const QJsonValue &value)
     case QJsonValue::Bool:
         return value.toBool();
     case QJsonValue::Double: {
-        const double d = value.toDouble();
-        if (std::floor(d) == d && std::abs(d) < 9.0e15)
-            return QVariant(static_cast<qlonglong>(d));
-        return d;
+        // The natural mapping (m12): an integer is an 'i' when it fits in 32
+        // bits, an 'x' otherwise; anything else is a 'd'. Qt keeps integers
+        // that fit in int64 exact; two defaults tell such a value apart.
+        const qint64 exactA = value.toInteger(0);
+        const qint64 exactB = value.toInteger(1);
+        if (exactA != exactB)
+            return value.toDouble();
+        if (exactA >= std::numeric_limits<int>::min() && exactA <= std::numeric_limits<int>::max())
+            return QVariant(static_cast<int>(exactA));
+        return QVariant(static_cast<qlonglong>(exactA));
     }
     case QJsonValue::String:
         return value.toString();

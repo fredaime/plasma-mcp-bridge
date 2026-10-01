@@ -9,6 +9,7 @@ Owns org.plasmamcp.Validation at /Echo on the private test bus.
 - Slow(d)       replies after d seconds WITHOUT blocking the service (several
                 Slow calls overlap); SlowBlocking(d) blocks the service.
 - org.freedesktop.DBus.Properties Set/Get/GetAll record the last Set.
+- /Loose answers EchoAny(any signature) but has no introspection data.
 Prints "READY org.plasmamcp.Validation" once the name is owned.
 """
 import os
@@ -227,6 +228,36 @@ class Nested(dbus.service.Object):
         return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
 
 
+_BASIC_CODES = {dbus.Byte: 'y', dbus.Boolean: 'b', dbus.Int16: 'n', dbus.UInt16: 'q',
+                dbus.Int32: 'i', dbus.UInt32: 'u', dbus.Int64: 'x', dbus.UInt64: 't',
+                dbus.Double: 'd', dbus.String: 's', dbus.ObjectPath: 'o',
+                dbus.Signature: 'g'}
+
+
+def _wire_type(value):
+    if isinstance(value, dbus.Dictionary):
+        return 'a{%s}' % value.signature
+    if isinstance(value, dbus.Array):
+        return 'a%s' % value.signature
+    return _BASIC_CODES[type(value)]
+
+
+class Loose(dbus.service.Object):
+    """No introspection data: the bridge cannot type the arguments, so they
+    take the natural mapping. EchoAny accepts any signature."""
+
+    @dbus.service.method('org.freedesktop.DBus.Introspectable', in_signature='',
+                         out_signature='s')
+    def Introspect(self):
+        return '<node/>'
+
+    # dbus-python cannot pass the message to a *args method: the signature is
+    # rebuilt from the types the arguments arrived with.
+    @dbus.service.method(IFACE, out_signature='s')
+    def EchoAny(self, *args):
+        return '%s|%r' % (''.join(_wire_type(a) for a in args), list(args))
+
+
 def main():
     if os.environ.get('PLASMA_MCP_TEST_BUS') != os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
         sys.exit('echo_service: refusing to own names outside the private test bus '
@@ -236,6 +267,7 @@ def main():
     name = dbus.service.BusName(NAME, bus, do_not_queue=True)  # noqa: F841 (keeps the name)
     Echo(bus, '/Echo')
     Nested(bus, '/Nested')
+    Loose(bus, '/Loose')
     print('READY ' + NAME, flush=True)
     GLib.MainLoop().run()
 
