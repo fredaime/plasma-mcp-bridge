@@ -31,6 +31,9 @@ return the wire signature they received, `Ret*` methods return typed values;
 `trap_services.py` stands in for the services of the built-in denylist (login1,
 systemd1, KWin, …) on the private bus and records every call it receives, so a
 policy test asserts that a refused call never arrived).
+`tests/plugin/testplugin.cpp` is a minimal plugin (sleeping tools, a clashing
+tool name) built with the tests; `test_async` loads it through
+`PLASMA_MCP_TEST_PLUGIN`.
 `tests/mcp_session.py` is the MCP client; a reply that misses its deadline is a
 test failure and kills the bridge. New test module = one new line in the
 `_tests` list of `tests/CMakeLists.txt`. Assert on D-Bus error *names*, never
@@ -58,8 +61,17 @@ Layers under `src/` (include paths are rooted at `src/`, so headers are included
   - `StdioTransport` reads newline-delimited JSON-RPC from stdin via a
     `QSocketNotifier` and writes responses to stdout. **Nothing else may write to
     stdout** — it would corrupt the protocol stream; use `qInfo/qWarning` (stderr).
-  - `Server` dispatches `initialize`, `notifications/initialized`, `ping`,
-    `tools/list`, `tools/call`.
+  - `Server` (main thread) validates frames (`-32700`/`-32600`/`-32602`),
+    negotiates the protocol version (`mcp/protocolversion.*`), answers
+    `initialize`, `ping`, `tools/list` and notifications at once, and hands
+    each `tools/call` to `ToolRunner` (`mcp/toolrunner.*`): built-in tools on
+    a `QThreadPool` of 4, plugin tools on a pool of 1, results posted back to
+    the main thread. Replies may come out of order. On EOF it drains for 2 s,
+    then `std::_Exit(0)` if a call still runs (never destroy a pool with a
+    running task).
+  - `Tool::call()` runs on a worker thread: a tool must not touch
+    main-thread-only objects and must not write stdout. `ToolRegistry::add()`
+    refuses a name that is already registered.
   - `Tool` is the abstract interface every tool implements (`name`,
     `description`, `inputSchema` as JSON Schema, `call`). `ToolRegistry` owns them.
   - `jsonrpc` has the JSON-RPC result/error envelope helpers and error codes.
@@ -133,6 +145,9 @@ Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
 - `--default-deny` — only calls matching an `--allow` pattern pass.
 - `--allow-unique-names` — accept `:N.M` destinations (the rules still apply
   to the connection behind them).
+- `--call-timeout-ms <ms>` — how long `dbus_call` waits for each D-Bus
+  round-trip (default 25000); a call's `timeout_ms` overrides it. Invalid value:
+  exit code 2.
 
 ## Conventions
 
@@ -142,8 +157,8 @@ Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
   JSON-heavy code stays readable). `KDECompilerSettings` is deliberately omitted
   from CMake for the same reason; `KDEInstallDirs` and `KDECMakeSettings` are used.
 - Source files carry a one-line `// SPDX-License-Identifier: MIT` header.
-- The MCP protocol version the server advertises lives in `kDefaultProtocolVersion`
-  in `src/mcp/server.cpp`; the build stamps the package version via the
+- The MCP protocol versions the server speaks live in
+  `src/mcp/protocolversion.cpp`; the build stamps the package version via the
   `PLASMA_MCP_BRIDGE_VERSION` compile definition (set in `src/CMakeLists.txt`).
 - The code must build with `-Werror` on Qt 6.4 (CI) and on current Qt. Do not
   use `qAsConst`, `_qs` or `Q_FOREACH`; deprecation warnings are pinned to the
