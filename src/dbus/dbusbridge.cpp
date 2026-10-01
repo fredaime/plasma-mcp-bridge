@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "dbus/dbusbridge.h"
 
+#include "dbus/interfaceresolver.h"
+#include "dbus/typecoercer.h"
+
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -12,7 +15,6 @@
 #include <QDBusUnixFileDescriptor>
 #include <QDBusVariant>
 #include <QJsonObject>
-#include <QMetaMethod>
 #include <QMetaType>
 
 #include <cmath>
@@ -72,36 +74,6 @@ DBusResult DBusBridge::introspect(const QString &busName, const QString &service
     return DBusResult::success(reply.value());
 }
 
-// Convert loosely-typed arguments (as produced by jsonToVariant: qlonglong
-// for any integer, QVariantList for any array) to the parameter types of the
-// introspected method, so Qt marshals the signature the remote expects.
-// Best-effort: arguments that don't convert are left untouched.
-static void coerceToMethodSignature(const QDBusInterface &iface, const QString &method,
-                                    QVariantList &args)
-{
-    const QMetaObject *mo = iface.metaObject();
-    for (int i = mo->methodOffset(); i < mo->methodCount(); ++i) {
-        const QMetaMethod candidate = mo->method(i);
-        if (QString::fromLatin1(candidate.name()) != method
-            || candidate.parameterCount() != args.size())
-            continue;
-        for (int p = 0; p < candidate.parameterCount(); ++p) {
-            const QMetaType target = candidate.parameterMetaType(p);
-            if (!target.isValid() || args[p].metaType() == target)
-                continue;
-            // Convert a copy: canConvert() only checks the type pair, and a
-            // failed in-place convert() clears the value to a default (e.g.
-            // "junk" -> uint 0), silently calling the method with garbage.
-            // On value-level failure keep the original argument so the
-            // remote rejects the mistyped call and the caller sees an error.
-            QVariant converted = args[p];
-            if (converted.convert(target))
-                args[p] = converted;
-        }
-        return;
-    }
-}
-
 DBusResult DBusBridge::callMethod(const QString &busName, const QString &service,
                                   const QString &path, const QString &interface,
                                   const QString &method, const QJsonArray &args)
@@ -110,33 +82,35 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
     if (!bus.isConnected())
         return DBusResult::failure(QStringLiteral("Not connected to the %1 bus").arg(busName));
 
+    const MethodResolution resolution = resolveMethod(bus, service, path, interface, method);
+
+    // Typed conversion when the introspection data names exactly one method
+    // with this argument count; otherwise the loose mapping (the remote then
+    // rejects a mismatch itself).
+    const bool typed = resolution.state == MethodResolution::Unique
+        && resolution.inSignature.size() == args.size();
     QVariantList variantArgs;
     variantArgs.reserve(args.size());
-    for (const QJsonValue &arg : args)
-        variantArgs.append(jsonToVariant(arg));
-
-    QDBusMessage reply;
-    if (!interface.isEmpty()) {
-        // Going through QDBusInterface gives us the introspected signature,
-        // but Qt only uses it when the argument types already match — with
-        // mismatched types callWithArgumentList silently degrades to an
-        // un-introspected call that puts the wrong signature on the wire
-        // (e.g. 'x' where the method wants 'u'). So convert each argument
-        // to the introspected parameter type ourselves before calling.
-        QDBusInterface iface(service, path, interface, bus);
-        if (!iface.isValid()) {
-            const QString message = iface.lastError().message();
-            return DBusResult::failure(message.isEmpty()
-                ? QStringLiteral("No such interface %1 on %2 %3").arg(interface, service, path)
-                : message);
+    for (int i = 0; i < args.size(); ++i) {
+        if (!typed) {
+            variantArgs.append(jsonToVariant(args.at(i)));
+            continue;
         }
-        coerceToMethodSignature(iface, method, variantArgs);
-        reply = iface.callWithArgumentList(QDBus::Block, method, variantArgs);
-    } else {
-        QDBusMessage call = QDBusMessage::createMethodCall(service, path, QString(), method);
-        call.setArguments(variantArgs);
-        reply = bus.call(call, QDBus::Block);
+        QVariant value;
+        QString error;
+        if (!TypeCoercer::coerce(args.at(i), resolution.inSignature.at(i), &value, &error))
+            return DBusResult::failure(QStringLiteral("argument %1 (%2): %3")
+                                           .arg(i).arg(resolution.inSignature.at(i), error));
+        variantArgs.append(value);
     }
+
+    // A plain method call with an explicit interface. QDBusInterface is not
+    // used: its isValid() relies on name-owner tracking, which the bus daemon
+    // does not have ("No such interface org.freedesktop.DBus"), and it turns
+    // a void reply into an invalid QVariant.
+    QDBusMessage call = QDBusMessage::createMethodCall(service, path, resolution.interface, method);
+    call.setArguments(variantArgs);
+    const QDBusMessage reply = bus.call(call, QDBus::Block);
 
     if (reply.type() == QDBusMessage::ErrorMessage)
         return DBusResult::failure(
@@ -210,13 +184,12 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     case QMetaType::LongLong:
         return static_cast<qint64>(value.toLongLong());
     case QMetaType::ULongLong: {
-        // A uint64 above INT64_MAX would wrap to a negative number if cast
-        // straight to qint64, so fall back to double for those (lossy, but
-        // it preserves sign and magnitude).
+        // Beyond 2^53 a JSON number no longer holds the value exactly (clients
+        // parse numbers as doubles): emit the exact decimal string instead.
         const qulonglong u = value.toULongLong();
-        if (u <= static_cast<qulonglong>(std::numeric_limits<qint64>::max()))
+        if (u <= (Q_UINT64_C(1) << 53))
             return static_cast<qint64>(u);
-        return static_cast<double>(u);
+        return QString::number(u);
     }
     case QMetaType::Float:
     case QMetaType::Double:

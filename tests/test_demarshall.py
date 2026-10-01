@@ -82,6 +82,23 @@ class Demarshall(FixtureTestCase):
     def test_map_byte_key_is_a_number(self):
         self.assertEqual(self.ret('RetMapYS'), {'0': 'a', '65': 'b', '200': 'c'})
 
+    # --- M1: exact numbers ------------------------------------------------
+    def scalar(self, method):
+        return self.bridge().call('dbus_call', dict(ECHO, method=method))
+
+    def test_uint32_is_exact(self):
+        self.assertEqual(self.scalar('RetU'), ('123456789', False))
+
+    def test_int64_is_exact(self):
+        self.assertEqual(self.scalar('RetX'), ('4000000', False))
+
+    def test_double_keeps_its_digits(self):
+        self.assertEqual(self.scalar('RetD'), ('3.14159265', False))
+
+    def test_uint64_beyond_2_53_is_a_decimal_string(self):
+        self.assertEqual(self.scalar('RetT'), ('18446744073709551615', False))
+        self.assertEqual(self.ret('RetASVBigT'), {'big': '18446744073709551615', 'small': 5})
+
 
 if __name__ == '__main__':
     unittest.main()

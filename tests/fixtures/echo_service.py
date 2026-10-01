@@ -39,7 +39,21 @@ def _echo(signature):
     return decorator
 
 
-class Echo(dbus.service.Object):
+def _dup(interface):
+    """Same member name in two interfaces: calls without an interface are ambiguous."""
+    def Dup(self, a, msg=None):
+        return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
+    return dbus.service.method(interface, in_signature='u', out_signature='s',
+                               message_keyword='msg')(Dup)
+
+
+class _OtherInterface(dbus.service.Object):
+    # dbus-python looks a member up by attribute name, class by class along the
+    # MRO: the second declaration of Dup must live in a base class.
+    Dup = _dup('org.plasmamcp.Other')
+
+
+class Echo(_OtherInterface):
     last_set = 'never'
 
     # --- Echo: what did the bridge send? -------------------------------
@@ -73,6 +87,16 @@ class Echo(dbus.service.Object):
     def EchoB(self): pass
     @_echo('ox')
     def EchoOX(self): pass
+    @_echo('t')
+    def EchoT(self): pass
+    @_echo('s')
+    def EchoS(self): pass
+
+    @dbus.service.method(IFACE, in_signature='u', out_signature='s', message_keyword='msg')
+    def EchoIface(self, a, msg=None):
+        return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
+
+    Dup = _dup(IFACE)
 
     # --- Ret: typed replies -------------------------------------------------
     @dbus.service.method(IFACE, in_signature='', out_signature='u')
@@ -93,6 +117,10 @@ class Echo(dbus.service.Object):
     def RetASV(self):
         return {'pos': dbus.Int64(123456789), 'pi': dbus.Double(3.14159265),
                 'pid': dbus.UInt32(3303203)}
+    @dbus.service.method(IFACE, in_signature='', out_signature='a{sv}')
+    def RetASVBigT(self):
+        return {'big': dbus.UInt64(18446744073709551615, variant_level=1),
+                'small': dbus.UInt64(5, variant_level=1)}
     @dbus.service.method(IFACE, in_signature='', out_signature='a{sv}')
     def RetBigASV(self):
         return {'k%04d' % i: dbus.Int32(i, variant_level=1) for i in range(5000)}
@@ -166,6 +194,37 @@ class Echo(dbus.service.Object):
         return {'LastSet': Echo.last_set}
 
 
+NESTED_XML = '''<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.freedesktop.DBus.Introspectable">
+    <method name="Introspect"><arg name="data" type="s" direction="out"/></method>
+  </interface>
+  <interface name="org.plasmamcp.Parent">
+    <method name="Nested"><arg type="u" direction="in"/><arg type="s" direction="out"/></method>
+  </interface>
+  <node name="child">
+    <interface name="org.plasmamcp.Child">
+      <method name="Nested"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
+    </interface>
+  </node>
+</node>'''
+
+
+class Nested(dbus.service.Object):
+    """Introspection data with a full child description (allowed by the spec):
+    the child's interfaces must not be attributed to this object."""
+
+    @dbus.service.method('org.freedesktop.DBus.Introspectable', in_signature='', out_signature='s')
+    def Introspect(self):
+        return NESTED_XML
+
+    @dbus.service.method('org.plasmamcp.Parent', in_signature='u', out_signature='s',
+                         message_keyword='msg')
+    def Nested(self, a, msg=None):
+        return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
+
+
 def main():
     if os.environ.get('PLASMA_MCP_TEST_BUS') != os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
         sys.exit('echo_service: refusing to own names outside the private test bus '
@@ -174,6 +233,7 @@ def main():
     bus = dbus.SessionBus()
     name = dbus.service.BusName(NAME, bus, do_not_queue=True)  # noqa: F841 (keeps the name)
     Echo(bus, '/Echo')
+    Nested(bus, '/Nested')
     print('READY ' + NAME, flush=True)
     GLib.MainLoop().run()
 
