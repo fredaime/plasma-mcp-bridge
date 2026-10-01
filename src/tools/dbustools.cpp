@@ -11,6 +11,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 
+#include <cmath>
+#include <limits>
+
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -244,6 +247,14 @@ QJsonObject DBusCallTool::inputSchema() const
             "interface of the object declares the method; give it to choose between several.")));
     properties.insert(QStringLiteral("method"),
                       stringProperty(QStringLiteral("Method to call, e.g. nextDesktop.")));
+    QJsonObject timeout;
+    timeout.insert(QStringLiteral("type"), QStringLiteral("integer"));
+    timeout.insert(QStringLiteral("minimum"), 1);
+    timeout.insert(QStringLiteral("description"),
+                   QStringLiteral("Milliseconds to wait for each D-Bus round-trip of this call "
+                                  "(introspection, then the call). Defaults to the bridge's "
+                                  "--call-timeout-ms (25000)."));
+    properties.insert(QStringLiteral("timeout_ms"), timeout);
     properties.insert(QStringLiteral("args"), args);
 
     QJsonObject schema;
@@ -261,6 +272,16 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
     const QString busError = busArgument(arguments, &bus);
     if (!busError.isEmpty())
         return ToolResult::failure(busError);
+    int timeoutMs = m_defaultTimeoutMs;
+    const QJsonValue timeoutValue = arguments.value(QStringLiteral("timeout_ms"));
+    if (!timeoutValue.isUndefined() && !timeoutValue.isNull()) {
+        const double ms = timeoutValue.toDouble();
+        if (!timeoutValue.isDouble() || ms < 1 || ms > std::numeric_limits<int>::max()
+            || std::floor(ms) != ms)
+            return ToolResult::failure(
+                QStringLiteral("'timeout_ms' must be an integer between 1 and 2147483647"));
+        timeoutMs = static_cast<int>(ms);
+    }
     const QString service = arguments.value(QStringLiteral("service")).toString();
     const QString path = arguments.value(QStringLiteral("path")).toString();
     const QString interface = arguments.value(QStringLiteral("interface")).toString();
@@ -282,7 +303,7 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
     CallTarget target{bus, service, path, interface, method};
     if (target.interface.isEmpty() && m_policy->destinationAllowed(bus, service)) {
         const MethodResolution resolution =
-            resolveMethod(busConnection(bus), service, path, QString(), method);
+            resolveMethod(busConnection(bus), service, path, QString(), method, timeoutMs);
         if (resolution.state == MethodResolution::Unique)
             target.interface = resolution.interface;
     }
@@ -297,7 +318,7 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
         return ToolResult::failure(CallPolicy::refusal(decision));
 
     const DBusResult result =
-        m_bridge->callMethod(bus, service, path, target.interface, method, args);
+        m_bridge->callMethod(bus, service, path, target.interface, method, args, timeoutMs);
     if (!result.ok)
         return ToolResult::failure(result.error);
     return ToolResult::ok(stringify(result.value));

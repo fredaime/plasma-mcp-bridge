@@ -20,5 +20,5 @@ void DBusBackend::registerTools(ToolRegistry *registry, const BridgeContext &con
 {
     registry->add(std::make_unique<DBusListServicesTool>(context.dbus, m_policy));
     registry->add(std::make_unique<DBusIntrospectTool>(context.dbus, m_policy));
-    registry->add(std::make_unique<DBusCallTool>(context.dbus, m_policy));
+    registry->add(std::make_unique<DBusCallTool>(context.dbus, m_policy, m_callTimeoutMs));
 }

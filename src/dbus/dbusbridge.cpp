@@ -21,6 +21,11 @@
 #include <cmath>
 #include <limits>
 
+namespace {
+// What QtDBus waits by default (its -1).
+constexpr int kDefaultCallTimeoutMs = 25000;
+} // namespace
+
 DBusBridge::DBusBridge() = default;
 
 QDBusConnection DBusBridge::connection(const QString &busName)
@@ -77,11 +82,19 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
                                   const QString &path, const QString &interface,
                                   const QString &method, const QJsonArray &args)
 {
+    return callMethod(busName, service, path, interface, method, args, kDefaultCallTimeoutMs);
+}
+
+DBusResult DBusBridge::callMethod(const QString &busName, const QString &service,
+                                  const QString &path, const QString &interface,
+                                  const QString &method, const QJsonArray &args, int timeoutMs)
+{
     QDBusConnection bus = connection(busName);
     if (!bus.isConnected())
         return DBusResult::failure(QStringLiteral("Not connected to the %1 bus").arg(busName));
 
-    const MethodResolution resolution = resolveMethod(bus, service, path, interface, method);
+    const MethodResolution resolution =
+        resolveMethod(bus, service, path, interface, method, timeoutMs);
 
     // Typed conversion when the introspection data names exactly one method
     // with this argument count; otherwise the loose mapping (the remote then
@@ -109,7 +122,7 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
     // a void reply into an invalid QVariant.
     QDBusMessage call = QDBusMessage::createMethodCall(service, path, resolution.interface, method);
     call.setArguments(variantArgs);
-    const QDBusMessage reply = bus.call(call, QDBus::Block);
+    const QDBusMessage reply = bus.call(call, QDBus::Block, timeoutMs);
 
     if (reply.type() == QDBusMessage::ErrorMessage)
         return DBusResult::failure(

@@ -44,8 +44,8 @@ private:
 class DBusCallTool : public Tool
 {
 public:
-    DBusCallTool(DBusBridge *bridge, const CallPolicy *policy)
-        : m_bridge(bridge), m_policy(policy) {}
+    DBusCallTool(DBusBridge *bridge, const CallPolicy *policy, int defaultTimeoutMs)
+        : m_bridge(bridge), m_policy(policy), m_defaultTimeoutMs(defaultTimeoutMs) {}
     QString name() const override;
     QString description() const override;
     QJsonObject inputSchema() const override;
@@ -54,4 +54,5 @@ public:
 private:
     DBusBridge *m_bridge;
     const CallPolicy *m_policy;
+    int m_defaultTimeoutMs;
 };

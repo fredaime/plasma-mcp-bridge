@@ -27,10 +27,10 @@
 
 namespace {
 
-std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy)
+std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy, int callTimeoutMs)
 {
     std::vector<std::unique_ptr<Backend>> backends;
-    backends.push_back(std::make_unique<DBusBackend>(policy));
+    backends.push_back(std::make_unique<DBusBackend>(policy, callTimeoutMs));
     backends.push_back(std::make_unique<NotificationBackend>());
     return backends;
 }
@@ -106,6 +106,12 @@ int main(int argc, char *argv[])
                        "The rules still apply to the connection behind them."));
     parser.addOption(allowUniqueNamesOption);
 
+    QCommandLineOption callTimeoutOption(QStringLiteral("call-timeout-ms"),
+        QStringLiteral("Milliseconds dbus_call waits for each D-Bus round-trip (default 25000). "
+                       "A call's timeout_ms argument overrides it."),
+        QStringLiteral("ms"), QStringLiteral("25000"));
+    parser.addOption(callTimeoutOption);
+
     parser.process(app);
 
     CallPolicy::Options policyOptions;
@@ -126,7 +132,16 @@ int main(int argc, char *argv[])
 
     ToolRegistry registry;
 
-    const auto builtins = builtinBackends(&policy);
+    bool callTimeoutValid = false;
+    const int callTimeoutMs = parser.value(callTimeoutOption).toInt(&callTimeoutValid);
+    if (!callTimeoutValid || callTimeoutMs < 1) {
+        qCritical("plasma-mcp-bridge: invalid --call-timeout-ms value '%s': expected a positive "
+                  "integer",
+                  qUtf8Printable(parser.value(callTimeoutOption)));
+        return 2;
+    }
+
+    const auto builtins = builtinBackends(&policy, callTimeoutMs);
     std::vector<std::unique_ptr<Backend>> pluginBackends;
     PluginLoader loader;
     for (const QString &pluginPath : parser.values(pluginOption)) {

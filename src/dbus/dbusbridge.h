@@ -36,6 +36,11 @@ public:
     DBusResult introspect(const QString &busName, const QString &service, const QString &path);
     DBusResult callMethod(const QString &busName, const QString &service, const QString &path,
                           const QString &interface, const QString &method, const QJsonArray &args);
+    // Same, each D-Bus round-trip (introspection, then the call) waiting at
+    // most timeoutMs; the overload above uses 25000.
+    DBusResult callMethod(const QString &busName, const QString &service, const QString &path,
+                          const QString &interface, const QString &method, const QJsonArray &args,
+                          int timeoutMs);
 
     // JSON <-> D-Bus marshalling. Exposed so tools can reuse them.
     static QVariant jsonToVariant(const QJsonValue &value);

@@ -26,7 +26,8 @@ struct MethodResolution {
 MethodResolution resolveMethodFromXml(const QString &xml, const QString &interface,
                                       const QString &method);
 
-// Introspects service/path (one round-trip, no cache) and resolves `method`.
+// Introspects service/path (one round-trip of at most timeoutMs, no cache)
+// and resolves `method`.
 MethodResolution resolveMethod(const QDBusConnection &bus, const QString &service,
                                const QString &path, const QString &interface,
-                               const QString &method);
+                               const QString &method, int timeoutMs);

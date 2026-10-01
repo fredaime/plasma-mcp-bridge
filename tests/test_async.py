@@ -3,6 +3,7 @@
 import collections
 import json
 import os
+import subprocess
 import time
 import unittest
 
@@ -170,6 +171,60 @@ class Cancellation(FixtureTestCase):
         session.start('tools/call', tool_call(dict(ECHO, method='Slow', args=[0.5])), rid='1')
         self.assertEqual(sorted(json.dumps(m['id']) for m in session.collect(2, timeout=2)),
                          ['"1"', '1'])
+
+
+class CallTimeout(FixtureTestCase):
+    """SlowBlocking blocks the fixture: one test per class."""
+
+    def test_timeout_ms(self):
+        session = self.bridge()
+        started = time.monotonic()
+        reply = session.call('dbus_call', dict(ECHO, method='SlowBlocking', args=[3],
+                                               timeout_ms=1000), timeout=5)
+        elapsed = time.monotonic() - started
+        self.assertTrue(reply.is_error, reply.text)
+        self.assertIn('org.freedesktop.DBus.Error.NoReply', reply.text)
+        self.assertGreater(elapsed, 0.8)
+        self.assertLess(elapsed, 2.0)
+
+
+class DefaultCallTimeout(FixtureTestCase):
+    """SlowBlocking blocks the fixture: one test per class."""
+
+    def test_call_timeout_option(self):
+        session = self.bridge('--call-timeout-ms', '1000')
+        started = time.monotonic()
+        reply = session.call('dbus_call', dict(ECHO, method='SlowBlocking', args=[3]), timeout=5)
+        elapsed = time.monotonic() - started
+        self.assertIn('org.freedesktop.DBus.Error.NoReply', reply.text)
+        self.assertGreater(elapsed, 0.8)
+        self.assertLess(elapsed, 2.0)
+
+
+class TimeoutValues(FixtureTestCase):
+
+    def test_invalid_timeout_ms(self):
+        session = self.bridge()
+        for value in (0, -5, 1.5, '1000', True, 2 ** 31):
+            with self.subTest(value=value):
+                reply = session.call('dbus_call', dict(ECHO, method='RetU', timeout_ms=value))
+                self.assertTrue(reply.is_error, reply.text)
+                self.assertEqual(reply.text,
+                                 "'timeout_ms' must be an integer between 1 and 2147483647")
+
+    def test_timeout_ms_in_schema(self):
+        tools = self.bridge().request('tools/list')['result']['tools']
+        schema = next(t for t in tools if t['name'] == 'dbus_call')['inputSchema']
+        self.assertEqual(schema['properties']['timeout_ms']['type'], 'integer')
+
+    def test_invalid_call_timeout_option_exits_2(self):
+        for value in ('0', '-1', 'abc', '1.5'):
+            with self.subTest(value=value):
+                result = subprocess.run(
+                    [os.environ['PLASMA_MCP_BRIDGE'], '--call-timeout-ms', value],
+                    stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(b'invalid --call-timeout-ms value', result.stderr)
 
 
 if __name__ == '__main__':
