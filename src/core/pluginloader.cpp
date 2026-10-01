@@ -11,12 +11,12 @@
 PluginLoader::PluginLoader() = default;
 PluginLoader::~PluginLoader() = default;
 
-std::vector<std::unique_ptr<Backend>> PluginLoader::load(const QString &path)
+bool PluginLoader::load(const QString &path, std::vector<std::unique_ptr<Backend>> *backends)
 {
     const QFileInfo info(path);
     if (!info.exists() || !info.isFile()) {
         qWarning("plasma-mcp-bridge: plugin not found: %s", qUtf8Printable(path));
-        return {};
+        return false;
     }
 
     auto loader = std::make_unique<QPluginLoader>(info.absoluteFilePath());
@@ -24,7 +24,7 @@ std::vector<std::unique_ptr<Backend>> PluginLoader::load(const QString &path)
     if (!root) {
         qWarning("plasma-mcp-bridge: failed to load plugin %s: %s",
                  qUtf8Printable(path), qUtf8Printable(loader->errorString()));
-        return {};
+        return false;
     }
 
     auto *plugin = qobject_cast<PluginInterface *>(root);
@@ -32,10 +32,11 @@ std::vector<std::unique_ptr<Backend>> PluginLoader::load(const QString &path)
         qWarning("plasma-mcp-bridge: %s does not implement PluginInterface (IID mismatch?)",
                  qUtf8Printable(path));
         loader->unload();
-        return {};
+        return false;
     }
 
-    std::vector<std::unique_ptr<Backend>> backends = plugin->createBackends();
+    for (auto &backend : plugin->createBackends())
+        backends->push_back(std::move(backend));
     m_loaders.push_back(std::move(loader));
-    return backends;
+    return true;
 }

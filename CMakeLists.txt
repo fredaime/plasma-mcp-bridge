@@ -26,7 +26,6 @@ find_package(Qt6 ${QT_MIN_VERSION} REQUIRED COMPONENTS Core DBus)
 add_compile_definitions(QT_WARN_DEPRECATED_UP_TO=0x060400 QT_DEPRECATED_WARNINGS_SINCE=0x060400)
 
 add_subdirectory(src)
-add_subdirectory(data)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

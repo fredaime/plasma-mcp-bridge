@@ -27,7 +27,10 @@ Tests: `ctest --test-dir build --output-on-failure`. Each module in `tests/`
 is a Python `unittest` run by `tests/run_with_bus.sh` on a private session bus
 (no activatable services; the system bus is redirected onto it). Fixtures live
 in `tests/fixtures/` (`echo_service.py` is the D-Bus oracle: `Echo*` methods
-return the wire signature they received, `Ret*` methods return typed values).
+return the wire signature they received, `Ret*` methods return typed values;
+`trap_services.py` stands in for the services of the built-in denylist (login1,
+systemd1, KWin, …) on the private bus and records every call it receives, so a
+policy test asserts that a refused call never arrived).
 `tests/mcp_session.py` is the MCP client; a reply that misses its deadline is a
 test failure and kills the bridge. New test module = one new line in the
 `_tests` list of `tests/CMakeLists.txt`. Assert on D-Bus error *names*, never
@@ -84,6 +87,14 @@ Layers under `src/` (include paths are rooted at `src/`, so headers are included
   - `SkillEmitter::render(registry)` walks the registry and produces deterministic
     Markdown for a downstream packager that wants to ship an MCP skill alongside
     the bridge. Exposed via the `--emit-skill` CLI flag.
+  - `CallPolicy` (`core/callpolicy.*`, internal, not installed) holds the guard
+    rails of the D-Bus tools: system-bus switch, unique-name refusal, built-in
+    denylist, `--deny`/`--allow`/`--default-deny`, audit line format. `main.cpp`
+    builds it from the command line and hands it to `DBusBackend`, which passes
+    it to the three D-Bus tools. It is not part of `BridgeContext` (ABI):
+    `DBusBridge` and plugins are not filtered. `DBusCallTool` resolves a missing
+    interface before asking the policy and sends the call with the interface
+    that was judged.
 
 - **`src/backends/` — built-in backends.** `DBusBackend` registers the three
   generic D-Bus tools; `NotificationBackend` registers the freedesktop notification
@@ -108,11 +119,20 @@ Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
 
 ## CLI flags
 
-- `--plugin <path>` — load a backend plugin. Repeatable.
+- `--plugin <path>` — load a backend plugin. Repeatable. A plugin that cannot
+  be loaded makes the bridge exit with code 2.
 - `--emit-skill` — write the deterministic Markdown tool reference (every
   registered tool, including those contributed by `--plugin`) to stdout and exit.
   Used by skill packagers to detect drift between an installed skill and the
   shipping tool surface.
+- `--allow-system-bus` — let the D-Bus tools reach the system bus (refused by
+  default).
+- `--deny SERVICE:INTERFACE.METHOD`, `--allow SERVICE:INTERFACE.METHOD` —
+  repeatable `dbus_call` rules (`*` wildcard, case-sensitive); `--allow` lifts a
+  built-in denylist entry. A malformed pattern exits with code 2.
+- `--default-deny` — only calls matching an `--allow` pattern pass.
+- `--allow-unique-names` — accept `:N.M` destinations (the rules still apply
+  to the connection behind them).
 
 ## Conventions
 

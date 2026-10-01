@@ -4,12 +4,14 @@
 #include "mcp/tool.h"
 
 class DBusBridge;
+class CallPolicy;
 
 // Enumerate the well-known names currently on a bus.
 class DBusListServicesTool : public Tool
 {
 public:
-    explicit DBusListServicesTool(DBusBridge *bridge) : m_bridge(bridge) {}
+    DBusListServicesTool(DBusBridge *bridge, const CallPolicy *policy)
+        : m_bridge(bridge), m_policy(policy) {}
     QString name() const override;
     QString description() const override;
     QJsonObject inputSchema() const override;
@@ -17,6 +19,7 @@ public:
 
 private:
     DBusBridge *m_bridge;
+    const CallPolicy *m_policy;
 };
 
 // Return the introspection XML for an object, so an agent can discover the
@@ -24,7 +27,8 @@ private:
 class DBusIntrospectTool : public Tool
 {
 public:
-    explicit DBusIntrospectTool(DBusBridge *bridge) : m_bridge(bridge) {}
+    DBusIntrospectTool(DBusBridge *bridge, const CallPolicy *policy)
+        : m_bridge(bridge), m_policy(policy) {}
     QString name() const override;
     QString description() const override;
     QJsonObject inputSchema() const override;
@@ -32,6 +36,7 @@ public:
 
 private:
     DBusBridge *m_bridge;
+    const CallPolicy *m_policy;
 };
 
 // The generic bridge: invoke any method on any D-Bus object. This is what
@@ -39,7 +44,8 @@ private:
 class DBusCallTool : public Tool
 {
 public:
-    explicit DBusCallTool(DBusBridge *bridge) : m_bridge(bridge) {}
+    DBusCallTool(DBusBridge *bridge, const CallPolicy *policy)
+        : m_bridge(bridge), m_policy(policy) {}
     QString name() const override;
     QString description() const override;
     QJsonObject inputSchema() const override;
@@ -47,4 +53,5 @@ public:
 
 private:
     DBusBridge *m_bridge;
+    const CallPolicy *m_policy;
 };

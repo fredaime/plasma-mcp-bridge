@@ -24,7 +24,7 @@ class Harness(FixtureTestCase):
         self.assertIn('refusing to run outside the private test bus', probe.stderr)
 
     def test_system_bus_is_the_private_bus(self):
-        names = self.bridge().call_json('dbus_list_services', {'bus': 'system'})
+        names = self.bridge('--allow-system-bus').call_json('dbus_list_services', {'bus': 'system'})
         self.assertIn('org.plasmamcp.Validation', names)
         self.assertNotIn('org.freedesktop.login1', names)
 

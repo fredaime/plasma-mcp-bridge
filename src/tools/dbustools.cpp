@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: MIT
 #include "tools/dbustools.h"
 
+#include "core/callpolicy.h"
+#include "dbus/busconnection.h"
 #include "dbus/dbusbridge.h"
+#include "dbus/interfaceresolver.h"
 
+#include <QDBusConnectionInterface>
+#include <QDBusReply>
 #include <QJsonArray>
 #include <QJsonDocument>
+
+#include <cctype>
+#include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -32,6 +41,61 @@ QString stringify(const QJsonValue &value)
     }
 }
 
+// m5: 'bus' is "session" (also when absent or null) or "system"; anything
+// else is an error, not a silent fallback to the session bus. Returns the
+// error text, empty on success.
+QString busArgument(const QJsonObject &arguments, QString *bus)
+{
+    const QJsonValue value = arguments.value(QStringLiteral("bus"));
+    if (value.isUndefined() || value.isNull()) {
+        *bus = QStringLiteral("session");
+        return QString();
+    }
+    const QString name = value.toString();
+    if (name != QLatin1String("session") && name != QLatin1String("system"))
+        return QStringLiteral("'bus' must be \"session\" or \"system\"");
+    *bus = name;
+    return QString();
+}
+
+// busArgument, then the --allow-system-bus switch.
+QString selectBus(const QJsonObject &arguments, const CallPolicy *policy, QString *bus)
+{
+    const QString error = busArgument(arguments, bus);
+    if (!error.isEmpty())
+        return error;
+    if (*bus == QLatin1String("system") && !policy->systemBusAllowed())
+        return CallPolicy::refusal(PolicyDecision{false, QStringLiteral("system-bus")});
+    return QString();
+}
+
+// Letters, digits, '_' and the characters of `extra`: what D-Bus allows in
+// bus names (".-:"), object paths ("/"), interfaces (".") and members ("").
+// Checked before the policy and the audit log see a call, so a name can
+// neither forge an audit line nor dodge a rule with odd characters.
+bool nameCharactersOnly(const QString &text, const char *extra)
+{
+    for (const QChar c : text) {
+        if (c.unicode() >= 128)
+            return false;
+        const char ch = char(c.unicode());
+        if (ch == '\0')
+            return false;
+        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_' && !std::strchr(extra, ch))
+            return false;
+    }
+    return true;
+}
+
+// Straight to stderr, not through Qt's logging: QT_LOGGING_RULES must not be
+// able to silence the audit.
+void writeAudit(const QString &line)
+{
+    const QByteArray bytes = line.toUtf8() + '\n';
+    std::fwrite(bytes.constData(), 1, size_t(bytes.size()), stderr);
+    std::fflush(stderr);
+}
+
 QJsonObject busProperty()
 {
     QJsonObject bus;
@@ -39,7 +103,9 @@ QJsonObject busProperty()
     bus.insert(QStringLiteral("enum"), QJsonArray{QStringLiteral("session"), QStringLiteral("system")});
     bus.insert(QStringLiteral("default"), QStringLiteral("session"));
     bus.insert(QStringLiteral("description"),
-               QStringLiteral("Which bus to use. Plasma lives on the session bus."));
+               QStringLiteral("Which bus to use: \"session\" (the default; Plasma lives there) "
+                              "or \"system\" (refused unless the bridge was started with "
+                              "--allow-system-bus)."));
     return bus;
 }
 
@@ -79,7 +145,10 @@ QJsonObject DBusListServicesTool::inputSchema() const
 
 ToolResult DBusListServicesTool::call(const QJsonObject &arguments)
 {
-    const QString bus = arguments.value(QStringLiteral("bus")).toString(QStringLiteral("session"));
+    QString bus;
+    const QString busError = selectBus(arguments, m_policy, &bus);
+    if (!busError.isEmpty())
+        return ToolResult::failure(busError);
     const DBusResult result = m_bridge->listServices(bus);
     if (!result.ok)
         return ToolResult::failure(result.error);
@@ -120,7 +189,10 @@ QJsonObject DBusIntrospectTool::inputSchema() const
 
 ToolResult DBusIntrospectTool::call(const QJsonObject &arguments)
 {
-    const QString bus = arguments.value(QStringLiteral("bus")).toString(QStringLiteral("session"));
+    QString bus;
+    const QString busError = selectBus(arguments, m_policy, &bus);
+    if (!busError.isEmpty())
+        return ToolResult::failure(busError);
     const QString service = arguments.value(QStringLiteral("service")).toString();
     const QString path = arguments.value(QStringLiteral("path")).toString(QStringLiteral("/"));
     if (service.isEmpty())
@@ -140,10 +212,15 @@ QString DBusCallTool::name() const
 QString DBusCallTool::description() const
 {
     return QStringLiteral(
-        "Invoke a method on any D-Bus object and return its reply. This is the universal bridge to "
-        "desktop automation: KWin window/effect scripting, plasmashell, global shortcuts, power "
-        "management, media players (MPRIS), portals, and any other service. Arguments are passed "
-        "positionally as a JSON array and coerced to the method's signature.");
+        "Invoke a method on any D-Bus object and return its reply as JSON. This is the universal "
+        "bridge to desktop automation: KWin, plasmashell, global shortcuts, power management, "
+        "media players (MPRIS) and any other service on the bus. Arguments are passed "
+        "positionally as a JSON array and converted to the types the method declares in its "
+        "introspection data: integers are range-checked, a byte array (ay) may be given as a "
+        "base64 string, a uint64 beyond the int64 range as a decimal string. A method without "
+        "return value replies null. The bridge refuses known destructive methods (power off, "
+        "logout, script execution, systemd units), the system bus and unique connection names "
+        "(:N.M) unless it was started with the matching --allow option.");
 }
 
 QJsonObject DBusCallTool::inputSchema() const
@@ -163,7 +240,8 @@ QJsonObject DBusCallTool::inputSchema() const
     properties.insert(
         QStringLiteral("interface"),
         stringProperty(QStringLiteral(
-            "Interface name, e.g. org.kde.KWin. Recommended; required for reliable type coercion.")));
+            "Interface declaring the method, e.g. org.kde.KWin. May be omitted when exactly one "
+            "interface of the object declares the method; give it to choose between several.")));
     properties.insert(QStringLiteral("method"),
                       stringProperty(QStringLiteral("Method to call, e.g. nextDesktop.")));
     properties.insert(QStringLiteral("args"), args);
@@ -179,7 +257,10 @@ QJsonObject DBusCallTool::inputSchema() const
 
 ToolResult DBusCallTool::call(const QJsonObject &arguments)
 {
-    const QString bus = arguments.value(QStringLiteral("bus")).toString(QStringLiteral("session"));
+    QString bus;
+    const QString busError = busArgument(arguments, &bus);
+    if (!busError.isEmpty())
+        return ToolResult::failure(busError);
     const QString service = arguments.value(QStringLiteral("service")).toString();
     const QString path = arguments.value(QStringLiteral("path")).toString();
     const QString interface = arguments.value(QStringLiteral("interface")).toString();
@@ -189,7 +270,34 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
     if (service.isEmpty() || path.isEmpty() || method.isEmpty())
         return ToolResult::failure(QStringLiteral("'service', 'path' and 'method' are required"));
 
-    const DBusResult result = m_bridge->callMethod(bus, service, path, interface, method, args);
+    if (!nameCharactersOnly(service, ".-:") || !nameCharactersOnly(path, "/")
+        || !nameCharactersOnly(interface, ".") || !nameCharactersOnly(method, ""))
+        return ToolResult::failure(QStringLiteral(
+            "'service', 'path', 'interface' and 'method' may only contain the characters D-Bus "
+            "allows in names"));
+
+    // The policy judges the interface the call will carry. Without one, the
+    // introspection data may name it; the call is then sent with that
+    // interface explicitly, so what is checked is what is sent.
+    CallTarget target{bus, service, path, interface, method};
+    if (target.interface.isEmpty() && m_policy->destinationAllowed(bus, service)) {
+        const MethodResolution resolution =
+            resolveMethod(busConnection(bus), service, path, QString(), method);
+        if (resolution.state == MethodResolution::Unique)
+            target.interface = resolution.interface;
+    }
+    const QDBusConnection connection = busConnection(bus);
+    const auto ownerOf = [connection](const QString &name) {
+        const QDBusReply<QString> reply = connection.interface()->serviceOwner(name);
+        return reply.isValid() ? reply.value() : QString();
+    };
+    const PolicyDecision decision = m_policy->evaluate(target, ownerOf);
+    writeAudit(CallPolicy::auditLine(target, decision));
+    if (!decision.allowed)
+        return ToolResult::failure(CallPolicy::refusal(decision));
+
+    const DBusResult result =
+        m_bridge->callMethod(bus, service, path, target.interface, method, args);
     if (!result.ok)
         return ToolResult::failure(result.error);
     return ToolResult::ok(stringify(result.value));

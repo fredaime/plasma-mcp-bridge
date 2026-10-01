@@ -2,6 +2,7 @@
 #include "backends/dbusbackend.h"
 #include "backends/notificationbackend.h"
 #include "core/backend.h"
+#include "core/callpolicy.h"
 #include "core/pluginloader.h"
 #include "core/skillemitter.h"
 #include "dbus/dbusbridge.h"
@@ -23,10 +24,10 @@
 
 namespace {
 
-std::vector<std::unique_ptr<Backend>> builtinBackends()
+std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy)
 {
     std::vector<std::unique_ptr<Backend>> backends;
-    backends.push_back(std::make_unique<DBusBackend>());
+    backends.push_back(std::make_unique<DBusBackend>(policy));
     backends.push_back(std::make_unique<NotificationBackend>());
     return backends;
 }
@@ -67,19 +68,60 @@ int main(int argc, char *argv[])
                        "the currently-shipping tool surface."));
     parser.addOption(emitSkillOption);
 
+    QCommandLineOption allowSystemBusOption(QStringLiteral("allow-system-bus"),
+        QStringLiteral("Let the D-Bus tools reach the system bus (refused by default)."));
+    parser.addOption(allowSystemBusOption);
+
+    QCommandLineOption denyOption(QStringLiteral("deny"),
+        QStringLiteral("Refuse dbus_call to SERVICE:INTERFACE.METHOD ('*' matches any run of "
+                       "characters). May be repeated."),
+        QStringLiteral("pattern"));
+    parser.addOption(denyOption);
+
+    QCommandLineOption allowOption(QStringLiteral("allow"),
+        QStringLiteral("Permit dbus_call to SERVICE:INTERFACE.METHOD although the built-in "
+                       "denylist refuses it; with --default-deny, the only calls permitted. "
+                       "May be repeated."),
+        QStringLiteral("pattern"));
+    parser.addOption(allowOption);
+
+    QCommandLineOption defaultDenyOption(QStringLiteral("default-deny"),
+        QStringLiteral("Refuse every dbus_call that no --allow pattern matches."));
+    parser.addOption(defaultDenyOption);
+
+    QCommandLineOption allowUniqueNamesOption(QStringLiteral("allow-unique-names"),
+        QStringLiteral("Accept unique connection names (:N.M) as dbus_call destination. "
+                       "The rules still apply to the connection behind them."));
+    parser.addOption(allowUniqueNamesOption);
+
     parser.process(app);
+
+    CallPolicy::Options policyOptions;
+    policyOptions.allowSystemBus = parser.isSet(allowSystemBusOption);
+    policyOptions.allowUniqueNames = parser.isSet(allowUniqueNamesOption);
+    policyOptions.defaultDeny = parser.isSet(defaultDenyOption);
+    policyOptions.deny = parser.values(denyOption);
+    policyOptions.allow = parser.values(allowOption);
+    CallPolicy policy;
+    QString policyError;
+    if (!policy.configure(policyOptions, &policyError)) {
+        qCritical("plasma-mcp-bridge: %s", qUtf8Printable(policyError));
+        return 2;
+    }
 
     DBusBridge bridge;
     BridgeContext context{&bridge, QStringLiteral(PLASMA_MCP_BRIDGE_VERSION)};
 
     ToolRegistry registry;
 
-    auto allBackends = builtinBackends();
+    auto allBackends = builtinBackends(&policy);
     PluginLoader loader;
     for (const QString &pluginPath : parser.values(pluginOption)) {
-        auto pluginBackends = loader.load(pluginPath);
-        for (auto &backend : pluginBackends)
-            allBackends.push_back(std::move(backend));
+        if (!loader.load(pluginPath, &allBackends)) {
+            qCritical("plasma-mcp-bridge: aborting: plugin %s could not be loaded",
+                      qUtf8Printable(pluginPath));
+            return 2;
+        }
     }
 
     registerAll(allBackends, &registry, context);

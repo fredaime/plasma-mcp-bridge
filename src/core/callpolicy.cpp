@@ -1,0 +1,258 @@
+// SPDX-License-Identifier: MIT
+#include "core/callpolicy.h"
+
+#include <QHash>
+
+namespace {
+
+// '*' matches any run of characters, dots included; every other character
+// matches itself, case-sensitively.
+bool globMatch(const QString &pattern, const QString &text)
+{
+    qsizetype p = 0;
+    qsizetype t = 0;
+    qsizetype star = -1;
+    qsizetype resume = 0;
+    while (t < text.size()) {
+        if (p < pattern.size() && pattern.at(p) == QLatin1Char('*')) {
+            star = p++;
+            resume = t;
+        } else if (p < pattern.size() && pattern.at(p) == text.at(t)) {
+            ++p;
+            ++t;
+        } else if (star >= 0) {
+            p = star + 1;
+            t = ++resume;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern.at(p) == QLatin1Char('*'))
+        ++p;
+    return p == pattern.size();
+}
+
+// Known destructive or code-running methods, checked by introspection on
+// Plasma 6.7 and systemd (Ubuntu 26.10). Prefix wildcards also catch the
+// *WithFlags, *Replace, ... variants.
+const char *const kBuiltinDenylist[] = {
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.PowerOff*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.Reboot*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.Halt*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.Suspend*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.Hibernate*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.HybridSleep*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.Sleep*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.KExec*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.Terminate*",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.KillSession",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.KillUser",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.ScheduleShutdown",
+    "org.freedesktop.login1:org.freedesktop.login1.Manager.SetWallMessage",
+    "org.freedesktop.login1:org.freedesktop.login1.Session.Terminate",
+    "org.freedesktop.login1:org.freedesktop.login1.Session.Kill",
+    "org.freedesktop.login1:org.freedesktop.login1.User.Terminate",
+    "org.freedesktop.login1:org.freedesktop.login1.User.Kill",
+    "org.kde.KWin:org.kde.kwin.Scripting.*",
+    "org.kde.ksmserver:org.kde.KSMServerInterface.closeSession",
+    "org.kde.ksmserver:org.kde.KSMServerInterface.logout*",
+    "org.kde.Shutdown:org.kde.Shutdown.*",
+    "org.kde.plasmashell:org.kde.PlasmaShell.evaluateScript",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.StartUnit*",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.StartTransientUnit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.RestartUnit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.ReloadOrRestartUnit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.EnqueueUnitJob",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.KillUnit*",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.QueueSignalUnit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.StopUnit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.SetEnvironment",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.UnsetAndSetEnvironment",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.PowerOff",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.Reboot",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.SoftReboot",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.Halt",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.KExec",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.Exit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.SwitchRoot",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Start",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Restart",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.ReloadOrRestart",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Kill*",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.QueueSignal",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Stop",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.EnqueueJob",
+    "org.freedesktop.DBus:org.freedesktop.DBus.UpdateActivationEnvironment",
+};
+
+} // namespace
+
+CallPolicy::CallPolicy()
+{
+    for (const QString &text : builtinDenylist()) {
+        Pattern pattern;
+        const bool valid = parsePattern(text, &pattern);
+        Q_ASSERT(valid);
+        Q_UNUSED(valid);
+        m_builtin.append(pattern);
+    }
+}
+
+bool CallPolicy::configure(const Options &options, QString *error)
+{
+    const auto parseAll = [error](const QStringList &texts, const char *option,
+                                  QVector<Pattern> *out) {
+        for (const QString &text : texts) {
+            Pattern pattern;
+            if (!parsePattern(text, &pattern)) {
+                *error = QStringLiteral("invalid %1 pattern '%2': expected "
+                                        "SERVICE:INTERFACE.METHOD")
+                             .arg(QLatin1String(option), text);
+                return false;
+            }
+            out->append(pattern);
+        }
+        return true;
+    };
+    QVector<Pattern> deny;
+    QVector<Pattern> allow;
+    if (!parseAll(options.deny, "--deny", &deny) || !parseAll(options.allow, "--allow", &allow))
+        return false;
+    m_allowSystemBus = options.allowSystemBus;
+    m_allowUniqueNames = options.allowUniqueNames;
+    m_defaultDeny = options.defaultDeny;
+    m_deny = deny;
+    m_allow = allow;
+    return true;
+}
+
+bool CallPolicy::destinationAllowed(const QString &bus, const QString &service) const
+{
+    if (bus == QLatin1String("system") && !m_allowSystemBus)
+        return false;
+    return m_allowUniqueNames || !service.startsWith(QLatin1Char(':'));
+}
+
+PolicyDecision CallPolicy::evaluate(const CallTarget &target, const OwnerLookup &ownerOf) const
+{
+    if (target.bus == QLatin1String("system") && !m_allowSystemBus)
+        return {false, QStringLiteral("system-bus")};
+    // Otherwise the denylist could be bypassed with the unique name that
+    // dbus_list_services shows.
+    if (target.service.startsWith(QLatin1Char(':')) && !m_allowUniqueNames)
+        return {false, QStringLiteral("unique-name")};
+
+    // One lookup per name and call.
+    QHash<QString, QString> owners;
+    OwnerLookup owner;
+    if (ownerOf) {
+        owner = [&owners, &ownerOf](const QString &name) {
+            const auto it = owners.constFind(name);
+            if (it != owners.constEnd())
+                return it.value();
+            const QString value = ownerOf(name);
+            owners.insert(name, value);
+            return value;
+        };
+    }
+
+    for (const Pattern &pattern : m_deny) {
+        if (matches(pattern, target, true, owner))
+            return {false, QStringLiteral("deny:") + pattern.text};
+    }
+    // An allowing rule names the destination exactly: no owner lookup.
+    for (const Pattern &pattern : m_allow) {
+        if (matches(pattern, target, false, OwnerLookup()))
+            return {true, QStringLiteral("allow:") + pattern.text};
+    }
+    for (const Pattern &pattern : m_builtin) {
+        if (matches(pattern, target, true, owner))
+            return {false, QStringLiteral("builtin:") + pattern.text};
+    }
+    if (m_defaultDeny)
+        return {false, QStringLiteral("default-deny")};
+    return {true, QString()};
+}
+
+QString CallPolicy::refusal(const PolicyDecision &decision)
+{
+    const QString &rule = decision.rule;
+    if (rule == QLatin1String("system-bus"))
+        return QStringLiteral("Refused by policy: the system bus is disabled "
+                              "(start plasma-mcp-bridge with --allow-system-bus)");
+    if (rule == QLatin1String("unique-name"))
+        return QStringLiteral("Refused by policy: a unique connection name (:N.M) is not "
+                              "accepted as destination; use the service's well-known name (or "
+                              "start plasma-mcp-bridge with --allow-unique-names)");
+    if (rule == QLatin1String("default-deny"))
+        return QStringLiteral("Refused by policy: --default-deny is set and no --allow pattern "
+                              "matches");
+    if (rule.startsWith(QLatin1String("deny:")))
+        return QStringLiteral("Refused by policy: --deny %1").arg(rule.mid(5));
+    return QStringLiteral("Refused by policy: built-in denylist entry %1 (give 'interface' and "
+                          "start plasma-mcp-bridge with --allow %1 to permit it)")
+        .arg(rule.mid(8)); // after "builtin:"
+}
+
+QString CallPolicy::auditLine(const CallTarget &target, const PolicyDecision &decision)
+{
+    QString line = QStringLiteral("plasma-mcp-bridge: audit: %1 %2 %3 %4 %5.%6")
+                       .arg(decision.allowed ? QStringLiteral("allow") : QStringLiteral("deny"),
+                            target.bus, target.service, target.path,
+                            target.interface.isEmpty() ? QStringLiteral("*") : target.interface,
+                            target.method);
+    if (!decision.rule.isEmpty())
+        line += QLatin1Char(' ') + decision.rule;
+    return line;
+}
+
+bool CallPolicy::systemBusAllowed() const
+{
+    return m_allowSystemBus;
+}
+
+QStringList CallPolicy::builtinDenylist()
+{
+    QStringList list;
+    for (const char *entry : kBuiltinDenylist)
+        list.append(QString::fromLatin1(entry));
+    return list;
+}
+
+// SERVICE:INTERFACE.METHOD. The last ':' ends the service (a unique name
+// starts with ':'), the last '.' starts the method; no part may be empty.
+bool CallPolicy::parsePattern(const QString &text, Pattern *out)
+{
+    const qsizetype colon = text.lastIndexOf(QLatin1Char(':'));
+    const qsizetype dot = text.lastIndexOf(QLatin1Char('.'));
+    if (colon <= 0 || dot <= colon + 1 || dot == text.size() - 1)
+        return false;
+    out->text = text;
+    out->service = text.left(colon);
+    out->interface = text.mid(colon + 1, dot - colon - 1);
+    out->method = text.mid(dot + 1);
+    return true;
+}
+
+// An unknown interface gets the strictest reading: a refusing rule matches it
+// whatever its interface, an allowing rule only when its interface is '*'.
+// With ownerOf, a literal service also matches any name of the connection
+// that owns it. Method and interface are checked first: they cost nothing.
+bool CallPolicy::matches(const Pattern &pattern, const CallTarget &target,
+                         bool unknownInterfaceMatches, const OwnerLookup &ownerOf)
+{
+    if (!globMatch(pattern.method, target.method))
+        return false;
+    if (target.interface.isEmpty()) {
+        if (!unknownInterfaceMatches && pattern.interface != QLatin1String("*"))
+            return false;
+    } else if (!globMatch(pattern.interface, target.interface)) {
+        return false;
+    }
+    if (globMatch(pattern.service, target.service))
+        return true;
+    if (!ownerOf || pattern.service.contains(QLatin1Char('*')))
+        return false;
+    const QString destination = ownerOf(target.service);
+    return !destination.isEmpty() && destination == ownerOf(pattern.service);
+}
