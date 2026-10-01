@@ -117,9 +117,11 @@ int main(int argc, char *argv[])
     auto allBackends = builtinBackends(&policy);
     PluginLoader loader;
     for (const QString &pluginPath : parser.values(pluginOption)) {
-        auto pluginBackends = loader.load(pluginPath);
-        for (auto &backend : pluginBackends)
-            allBackends.push_back(std::move(backend));
+        if (!loader.load(pluginPath, &allBackends)) {
+            qCritical("plasma-mcp-bridge: aborting: plugin %s could not be loaded",
+                      qUtf8Printable(pluginPath));
+            return 2;
+        }
     }
 
     registerAll(allBackends, &registry, context);

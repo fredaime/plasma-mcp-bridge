@@ -3,6 +3,7 @@
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 import dbus
@@ -241,6 +242,19 @@ class Startup(unittest.TestCase):
                     self.assertEqual(result.stdout, b'')
                     self.assertIn(('invalid %s pattern' % flag).encode(), result.stderr)
 
+    def test_missing_plugin_exits_2(self):
+        for extra in ((), ('--emit-skill',)):
+            with self.subTest(mode=extra or 'server'):
+                result = run_bridge('--plugin', '/nonexistent/plugin.so', *extra)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stdout, b'')
+                self.assertIn(b'plugin not found', result.stderr)
+
+    def test_file_that_is_not_a_plugin_exits_2(self):
+        result = run_bridge('--plugin', os.path.abspath(__file__))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, b'')
+
 
 AUDIT = 'plasma-mcp-bridge: audit: '
 AUDIT_LINE = re.compile('^' + re.escape(AUDIT) + '.*$', re.MULTILINE)
@@ -320,6 +334,20 @@ class Audit(PolicyTestCase):
         reply = session.call('dbus_call', dict(ECHO, method='Ret Void'))
         self.assertIn('may only contain the characters D-Bus allows', reply.text)
         self.assertEqual(self.audited(session), [])
+
+
+class Install(unittest.TestCase):
+
+    def test_no_dbus_service_file_is_installed(self):
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run([os.environ['CMAKE_COMMAND'], '--install',
+                            os.environ['PLASMA_MCP_BUILD_DIR']],
+                           env=dict(os.environ, DESTDIR=root), check=True,
+                           capture_output=True, timeout=60)
+            installed = [os.path.relpath(os.path.join(directory, name), root)
+                         for directory, _, names in os.walk(root) for name in names]
+        self.assertTrue(any(p.endswith('bin/plasma-mcp-bridge') for p in installed), installed)
+        self.assertEqual([p for p in installed if p.endswith('.service')], [])
 
 
 if __name__ == '__main__':
