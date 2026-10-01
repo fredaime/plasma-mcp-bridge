@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.16)
 
-project(plasma-mcp-bridge VERSION 0.1.0 LANGUAGES CXX)
+# 0.1.90 = pre-release of 0.2.0 (see CHANGELOG.md).
+project(plasma-mcp-bridge VERSION 0.1.90 LANGUAGES CXX)
 
 set(QT_MIN_VERSION 6.4.0)
 set(ECM_MIN_VERSION 5.100.0)
