@@ -19,8 +19,12 @@ QString stringify(const QJsonValue &value)
         return value.toString();
     case QJsonValue::Bool:
         return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-    case QJsonValue::Double:
-        return QString::number(value.toDouble());
+    case QJsonValue::Double: {
+        // Format a scalar exactly like a number nested in an array or object:
+        // integers in full, reals as the shortest round-trip representation.
+        const QByteArray json = QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact);
+        return QString::fromUtf8(json.mid(1, json.size() - 2));
+    }
     case QJsonValue::Null:
         return QStringLiteral("null");
     default:

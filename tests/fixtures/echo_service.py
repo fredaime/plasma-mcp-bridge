@@ -94,6 +94,10 @@ class Echo(dbus.service.Object):
         return {'pos': dbus.Int64(123456789), 'pi': dbus.Double(3.14159265),
                 'pid': dbus.UInt32(3303203)}
     @dbus.service.method(IFACE, in_signature='', out_signature='a{sv}')
+    def RetASVBigT(self):
+        return {'big': dbus.UInt64(18446744073709551615, variant_level=1),
+                'small': dbus.UInt64(5, variant_level=1)}
+    @dbus.service.method(IFACE, in_signature='', out_signature='a{sv}')
     def RetBigASV(self):
         return {'k%04d' % i: dbus.Int32(i, variant_level=1) for i in range(5000)}
     @dbus.service.method(IFACE, in_signature='', out_signature='a(iss)')

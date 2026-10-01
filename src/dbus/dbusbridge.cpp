@@ -210,13 +210,12 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     case QMetaType::LongLong:
         return static_cast<qint64>(value.toLongLong());
     case QMetaType::ULongLong: {
-        // A uint64 above INT64_MAX would wrap to a negative number if cast
-        // straight to qint64, so fall back to double for those (lossy, but
-        // it preserves sign and magnitude).
+        // Beyond 2^53 a JSON number no longer holds the value exactly (clients
+        // parse numbers as doubles): emit the exact decimal string instead.
         const qulonglong u = value.toULongLong();
-        if (u <= static_cast<qulonglong>(std::numeric_limits<qint64>::max()))
+        if (u <= (Q_UINT64_C(1) << 53))
             return static_cast<qint64>(u);
-        return static_cast<double>(u);
+        return QString::number(u);
     }
     case QMetaType::Float:
     case QMetaType::Double:
