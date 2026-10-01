@@ -299,6 +299,17 @@ static QJsonValue unsupportedElement(const QString &signature)
     return QJsonValue(QStringLiteral("<unsupported D-Bus type '%1'>").arg(signature));
 }
 
+// JSON object keys are strings. QVariant::toString() knows nothing about
+// QDBusObjectPath / QDBusSignature and returns "" for them, so unwrap those.
+static QString mapKeyToString(const QVariant &key)
+{
+    if (key.metaType() == QMetaType::fromType<QDBusObjectPath>())
+        return key.value<QDBusObjectPath>().path();
+    if (key.metaType() == QMetaType::fromType<QDBusSignature>())
+        return key.value<QDBusSignature>().signature();
+    return key.toString();
+}
+
 // Demarshall the current element into `out`. Returns false when the element
 // was NOT consumed (its wire type is unknown to extractBasic): `out` then
 // holds an explanatory marker and the enclosing container loop must stop,
@@ -354,7 +365,7 @@ static bool demarshallElement(const QDBusArgument &argument, QJsonValue &out)
             const QVariant key = extractBasic(argument); // map keys are basic by spec
             QJsonValue value;
             const bool consumed = key.isValid() && demarshallElement(argument, value);
-            object.insert(key.isValid() ? key.toString() : QStringLiteral("<unsupported key>"),
+            object.insert(key.isValid() ? mapKeyToString(key) : QStringLiteral("<unsupported key>"),
                           value);
             argument.endMapEntry();
             if (!consumed)

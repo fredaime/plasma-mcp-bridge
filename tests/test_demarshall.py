@@ -62,6 +62,16 @@ class Demarshall(FixtureTestCase):
     def test_map_of_byte_arrays(self):
         self.assertEqual(self.ret('RetMapAY'), {'k': 'aGk='})
 
+    # --- M7: non-string map keys -----------------------------------------
+    def test_map_object_path_key(self):
+        self.assertEqual(self.ret('RetMapOAS'), {'/p': ['x']})
+
+    def test_map_signature_key(self):
+        self.assertEqual(self.ret('RetMapGAS'), {'a{sv}': ['x']})
+
+    def test_map_int_key(self):
+        self.assertEqual(self.ret('RetMapIS'), {'1': 'a', '2': 'b'})
+
 
 if __name__ == '__main__':
     unittest.main()
