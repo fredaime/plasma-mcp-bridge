@@ -131,8 +131,8 @@ Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
   repeatable `dbus_call` rules (`*` wildcard, case-sensitive); `--allow` lifts a
   built-in denylist entry. A malformed pattern exits with code 2.
 - `--default-deny` — only calls matching an `--allow` pattern pass.
-- `--allow-unique-names` — accept `:N.M` destinations (the denylist does not
-  see through them).
+- `--allow-unique-names` — accept `:N.M` destinations (the rules still apply
+  to the connection behind them).
 
 ## Conventions
 

@@ -78,15 +78,18 @@ live in a component the model can neither reach nor rewrite.
 The bridge itself adds a few switches and a denylist of known destructive
 calls, so that an agent does not power off the machine or run code by
 mistake. **This is not a security boundary**: it covers the `dbus_call` tool
-only (not the calls plugins or the bridge itself make), it does not see
-through other names of the same service or other methods with the same
-effect, and it does not filter object paths.
+only (not the calls plugins or the bridge itself make), it does not know
+other methods with the same effect, and it does not filter object paths. A
+rule on a well-known name also applies through every other name of the same
+connection — D-Bus delivers a call to the connection, so plasmashell's
+`evaluateScript` is refused whether it is addressed as `org.kde.plasmashell`
+or as `org.freedesktop.Notifications`, which plasmashell also owns.
 
 | By default | Switch |
 | --- | --- |
 | The system bus is refused by the three D-Bus tools | `--allow-system-bus` |
-| `dbus_call` to a unique connection name (`:1.42`) is refused — otherwise the denylist could be bypassed with the name `dbus_list_services` shows | `--allow-unique-names` |
-| A built-in denylist refuses logind power and session methods (`PowerOff*`, `Reboot*`, `Suspend*`, `Terminate*`, `KillSession`, …), systemd methods that start, kill or reconfigure units, KWin scripting, plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`, and the bus daemon's `UpdateActivationEnvironment` | `--allow SERVICE:INTERFACE.METHOD` lifts an entry |
+| `dbus_call` to a unique connection name (`:1.42`) is refused; with the switch, the rules still apply to the connection behind it | `--allow-unique-names` |
+| A built-in denylist refuses logind power and session methods (`PowerOff*`, `Reboot*`, `Suspend*`, `Terminate*`, `KillSession`, …), logind `Session`/`User` `Terminate` and `Kill`, systemd methods that start, stop, kill or reconfigure units, KWin scripting, plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`, and the bus daemon's `UpdateActivationEnvironment` | `--allow SERVICE:INTERFACE.METHOD` lifts an entry |
 | Everything else is allowed | `--deny SERVICE:INTERFACE.METHOD` refuses more; `--default-deny` makes the `--allow` patterns an allowlist |
 
 Patterns read `SERVICE:INTERFACE.METHOD` (the last `.` starts the method),

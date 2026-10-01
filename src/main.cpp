@@ -91,7 +91,7 @@ int main(int argc, char *argv[])
 
     QCommandLineOption allowUniqueNamesOption(QStringLiteral("allow-unique-names"),
         QStringLiteral("Accept unique connection names (:N.M) as dbus_call destination. "
-                       "The denylist does not see through them."));
+                       "The rules still apply to the connection behind them."));
     parser.addOption(allowUniqueNamesOption);
 
     parser.process(app);

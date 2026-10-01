@@ -240,11 +240,12 @@ comparaison **sensible à la casse** ; le chemin d'objet n'est pas filtré.
 revalidation) :
 
 - `org.freedesktop.login1:org.freedesktop.login1.Manager.{PowerOff*,Reboot*,Halt*,Suspend*,Hibernate*,HybridSleep*,Sleep*,KExec*,Terminate*,KillSession,KillUser,ScheduleShutdown,SetWallMessage}` (préfixes : variantes `*WithFlags` et `Sleep` — amendement PR5)
+- `org.freedesktop.login1:org.freedesktop.login1.{Session,User}.{Terminate,Kill}` (amendement PR5)
 - `org.kde.KWin:org.kde.kwin.Scripting.*`
 - `org.kde.ksmserver:org.kde.KSMServerInterface.{closeSession,logout*}`
 - `org.kde.Shutdown:org.kde.Shutdown.*`
 - `org.kde.plasmashell:org.kde.PlasmaShell.evaluateScript`
-- `org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.{StartUnit*,StartTransientUnit,RestartUnit,ReloadOrRestartUnit,EnqueueUnitJob,KillUnit*,SetEnvironment,UnsetAndSetEnvironment,PowerOff,Reboot,SoftReboot,Halt,KExec,Exit,SwitchRoot}` et `org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.{Start,Restart,ReloadOrRestart,Kill,EnqueueJob}` (exécution de commandes via `systemd --user` ; `StartUnitWithFlags`, `StartUnitReplace`, `EnqueueUnitJob`, `KillUnitSubgroup`, `SoftReboot`, `SwitchRoot` et l'interface `Unit` — amendement PR5)
+- `org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.{StartUnit*,StartTransientUnit,RestartUnit,ReloadOrRestartUnit,EnqueueUnitJob,KillUnit*,SetEnvironment,UnsetAndSetEnvironment,PowerOff,Reboot,SoftReboot,Halt,KExec,Exit,SwitchRoot}` et `org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.{Start,Restart,ReloadOrRestart,Kill*,QueueSignal,Stop,EnqueueJob}` (exécution de commandes via `systemd --user` ; `StartUnitWithFlags`, `StartUnitReplace`, `EnqueueUnitJob`, `QueueSignalUnit`, `StopUnit`, `KillUnitSubgroup`, `SoftReboot`, `SwitchRoot` et l'interface `Unit` — amendement PR5)
 - `org.freedesktop.DBus:org.freedesktop.DBus.UpdateActivationEnvironment`
 
 **Emplacement.** Unité `src/core/callpolicy.{h,cpp}` (non installée), construite dans `main.cpp` et
@@ -256,6 +257,8 @@ du core et ceux des plugins n'y passent pas, et le README le précise.
 `plasma-mcp-bridge: audit: <allow|deny> <bus> <service> <path> <interface>.<method> [rule]`.
 
 Les noms (`service`, `path`, `interface`, `method`) ne contenant pas que des caractères admis par D-Bus sont refusés avant la policy (amendement PR5 : une ligne d'audit ne peut pas être forgée). `bus: null` vaut `bus` absent.
+
+Amendement PR5 (revue finale) : une règle de refus (`--deny`, denylist) dont le service est littéral s'applique aussi aux autres noms de la connexion qui le possède (`GetNameOwner` de la destination comparé à celui du service de la règle) : D-Bus livre l'appel à la connexion, et plasmashell possède aussi `org.freedesktop.Notifications`, KWin `org.kde.kglobalaccel`. Une règle `--allow` ne nomme que la destination exacte.
 
 **m5.** La validation de `bus` se fait dans les outils (`session` ou `system`, sinon erreur
 explicite), pas dans `DBusBridge::connection()`.

@@ -6,6 +6,8 @@
 #include "dbus/dbusbridge.h"
 #include "dbus/interfaceresolver.h"
 
+#include <QDBusConnectionInterface>
+#include <QDBusReply>
 #include <QJsonArray>
 #include <QJsonDocument>
 
@@ -284,7 +286,12 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
         if (resolution.state == MethodResolution::Unique)
             target.interface = resolution.interface;
     }
-    const PolicyDecision decision = m_policy->evaluate(target);
+    const QDBusConnection connection = busConnection(bus);
+    const auto ownerOf = [connection](const QString &name) {
+        const QDBusReply<QString> reply = connection.interface()->serviceOwner(name);
+        return reply.isValid() ? reply.value() : QString();
+    };
+    const PolicyDecision decision = m_policy->evaluate(target, ownerOf);
     writeAudit(CallPolicy::auditLine(target, decision));
     if (!decision.allowed)
         return ToolResult::failure(CallPolicy::refusal(decision));

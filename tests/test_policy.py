@@ -132,6 +132,21 @@ class BuiltinDenylist(TrapTestCase):
         self.assertRefused(reply, 'built-in denylist entry')
         self.assertEqual(self.calls(), [])
 
+    def test_other_names_of_the_same_connection_are_seen_through(self):
+        # D-Bus delivers to the connection: every object of the stand-ins is
+        # reachable through every name they own (org.kde.KWin among them).
+        bridge = self.bridge()
+        reply = bridge.call('dbus_call', {'service': 'org.kde.KWin', 'path': LOGIN1_PATH,
+                                          'interface': LOGIN1_MANAGER, 'method': 'PowerOff'})
+        self.assertRefused(reply, 'built-in denylist entry')
+        reply = bridge.call('dbus_call', {'service': 'org.kde.KWin', 'path': LOGIN1_PATH,
+                                          'method': 'PowerOff'})
+        self.assertRefused(reply, 'built-in denylist entry')
+        self.assertEqual(self.calls(), [])
+        reply = bridge.call('dbus_call', {'service': 'org.kde.KWin', 'path': LOGIN1_PATH,
+                                          'method': 'CanPowerOff'})
+        self.assertEqual(reply, ('yes', False))
+
     def test_unique_name_destination_is_refused(self):
         owner = str(dbus.SessionBus().get_name_owner(LOGIN1))
         bridge = self.bridge()
@@ -183,6 +198,19 @@ class UserRules(TrapTestCase):
         # Ping is declared by the Manager and by the decoy.
         reply = self.login1('Ping', '--deny', LOGIN1 + ':' + LOGIN1_MANAGER + '.Ping')
         self.assertRefused(reply, '--deny')
+        self.assertEqual(self.calls(), [])
+
+    def test_deny_sees_through_other_names_of_the_same_connection(self):
+        reply = self.login1('CanPowerOff', '--deny', CAN_POWEROFF, service='org.kde.KWin')
+        self.assertRefused(reply, '--deny ' + CAN_POWEROFF)
+        self.assertEqual(self.calls(), [])
+
+    def test_allow_unique_names_still_applies_the_denylist(self):
+        owner = str(dbus.SessionBus().get_name_owner(LOGIN1))
+        reply = self.bridge('--allow-unique-names').call('dbus_call', {
+            'service': owner, 'path': LOGIN1_PATH, 'interface': LOGIN1_MANAGER,
+            'method': 'PowerOff'})
+        self.assertRefused(reply, 'built-in denylist entry')
         self.assertEqual(self.calls(), [])
 
     def test_patterns_are_case_sensitive(self):

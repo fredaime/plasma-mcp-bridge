@@ -31,10 +31,12 @@ Pre-releases are versioned 0.1.90+.
 - The system bus is refused unless the bridge is started with
   `--allow-system-bus` (all three D-Bus tools).
 - `dbus_call` refuses a built-in denylist of destructive methods (logind power
-  and session methods, systemd unit start/kill/environment, KWin scripting,
+  and session methods, systemd unit start/stop/kill/environment, KWin scripting,
   plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`,
   `UpdateActivationEnvironment`) and destinations given by unique name
-  (`:N.M`). See README, "Built-in guard rails". This is not a security boundary.
+  (`:N.M`); a rule also applies through the other names of the connection
+  that owns the name. See README, "Built-in guard rails". This is not a
+  security boundary.
 - An unknown `bus` value (e.g. `"sytem"`) is an error instead of silently
   meaning the session bus.
 - `dbus_call` rejects service, path, interface or method names with characters

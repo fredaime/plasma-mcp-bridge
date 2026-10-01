@@ -39,6 +39,9 @@ DENIED = (
         'HybridSleepWithFlags', 'SuspendThenHibernate', 'SuspendThenHibernateWithFlags',
         'Sleep', 'TerminateSession', 'TerminateUser', 'TerminateSeat', 'KillSession',
         'KillUser', 'ScheduleShutdown', 'SetWallMessage')),
+    (LOGIN1, LOGIN1_PATH + '/session/auto', 'org.freedesktop.login1.Session', (
+        'Terminate', 'Kill')),
+    (LOGIN1, LOGIN1_PATH + '/user/self', 'org.freedesktop.login1.User', ('Terminate', 'Kill')),
     ('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting', (
         'loadScript', 'loadDeclarativeScript', 'unloadScript', 'start')),
     ('org.kde.ksmserver', '/KSMServer', 'org.kde.KSMServerInterface', ('closeSession', 'logout')),
@@ -49,9 +52,10 @@ DENIED = (
         'StartUnit', 'StartUnitWithFlags', 'StartUnitReplace', 'StartTransientUnit',
         'RestartUnit', 'ReloadOrRestartUnit', 'EnqueueUnitJob', 'KillUnit', 'KillUnitSubgroup',
         'SetEnvironment', 'UnsetAndSetEnvironment', 'PowerOff', 'Reboot', 'SoftReboot', 'Halt',
-        'KExec', 'Exit', 'SwitchRoot')),
+        'KExec', 'Exit', 'SwitchRoot', 'QueueSignalUnit', 'StopUnit')),
     (SYSTEMD1, SYSTEMD1_PATH + '/unit/app_2eservice', 'org.freedesktop.systemd1.Unit', (
-        'Start', 'Restart', 'ReloadOrRestart', 'Kill', 'EnqueueJob')),
+        'Start', 'Restart', 'ReloadOrRestart', 'Kill', 'KillSubgroup', 'QueueSignal', 'Stop',
+        'EnqueueJob')),
 )
 
 # (object path, interface, member, reply): members the denylist lets through.

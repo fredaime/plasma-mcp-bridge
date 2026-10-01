@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "core/callpolicy.h"
 
+#include <QHash>
+
 namespace {
 
 // '*' matches any run of characters, dots included; every other character
@@ -47,6 +49,10 @@ const char *const kBuiltinDenylist[] = {
     "org.freedesktop.login1:org.freedesktop.login1.Manager.KillUser",
     "org.freedesktop.login1:org.freedesktop.login1.Manager.ScheduleShutdown",
     "org.freedesktop.login1:org.freedesktop.login1.Manager.SetWallMessage",
+    "org.freedesktop.login1:org.freedesktop.login1.Session.Terminate",
+    "org.freedesktop.login1:org.freedesktop.login1.Session.Kill",
+    "org.freedesktop.login1:org.freedesktop.login1.User.Terminate",
+    "org.freedesktop.login1:org.freedesktop.login1.User.Kill",
     "org.kde.KWin:org.kde.kwin.Scripting.*",
     "org.kde.ksmserver:org.kde.KSMServerInterface.closeSession",
     "org.kde.ksmserver:org.kde.KSMServerInterface.logout*",
@@ -58,6 +64,8 @@ const char *const kBuiltinDenylist[] = {
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.ReloadOrRestartUnit",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.EnqueueUnitJob",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.KillUnit*",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.QueueSignalUnit",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.StopUnit",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.SetEnvironment",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.UnsetAndSetEnvironment",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Manager.PowerOff",
@@ -70,7 +78,9 @@ const char *const kBuiltinDenylist[] = {
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Start",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Restart",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.ReloadOrRestart",
-    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Kill",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Kill*",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.QueueSignal",
+    "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.Stop",
     "org.freedesktop.systemd1:org.freedesktop.systemd1.Unit.EnqueueJob",
     "org.freedesktop.DBus:org.freedesktop.DBus.UpdateActivationEnvironment",
 };
@@ -123,7 +133,7 @@ bool CallPolicy::destinationAllowed(const QString &bus, const QString &service) 
     return m_allowUniqueNames || !service.startsWith(QLatin1Char(':'));
 }
 
-PolicyDecision CallPolicy::evaluate(const CallTarget &target) const
+PolicyDecision CallPolicy::evaluate(const CallTarget &target, const OwnerLookup &ownerOf) const
 {
     if (target.bus == QLatin1String("system") && !m_allowSystemBus)
         return {false, QStringLiteral("system-bus")};
@@ -131,16 +141,32 @@ PolicyDecision CallPolicy::evaluate(const CallTarget &target) const
     // dbus_list_services shows.
     if (target.service.startsWith(QLatin1Char(':')) && !m_allowUniqueNames)
         return {false, QStringLiteral("unique-name")};
+
+    // One lookup per name and call.
+    QHash<QString, QString> owners;
+    OwnerLookup owner;
+    if (ownerOf) {
+        owner = [&owners, &ownerOf](const QString &name) {
+            const auto it = owners.constFind(name);
+            if (it != owners.constEnd())
+                return it.value();
+            const QString value = ownerOf(name);
+            owners.insert(name, value);
+            return value;
+        };
+    }
+
     for (const Pattern &pattern : m_deny) {
-        if (matches(pattern, target, true))
+        if (matches(pattern, target, true, owner))
             return {false, QStringLiteral("deny:") + pattern.text};
     }
+    // An allowing rule names the destination exactly: no owner lookup.
     for (const Pattern &pattern : m_allow) {
-        if (matches(pattern, target, false))
+        if (matches(pattern, target, false, OwnerLookup()))
             return {true, QStringLiteral("allow:") + pattern.text};
     }
     for (const Pattern &pattern : m_builtin) {
-        if (matches(pattern, target, true))
+        if (matches(pattern, target, true, owner))
             return {false, QStringLiteral("builtin:") + pattern.text};
     }
     if (m_defaultDeny)
@@ -210,12 +236,23 @@ bool CallPolicy::parsePattern(const QString &text, Pattern *out)
 
 // An unknown interface gets the strictest reading: a refusing rule matches it
 // whatever its interface, an allowing rule only when its interface is '*'.
+// With ownerOf, a literal service also matches any name of the connection
+// that owns it. Method and interface are checked first: they cost nothing.
 bool CallPolicy::matches(const Pattern &pattern, const CallTarget &target,
-                         bool unknownInterfaceMatches)
+                         bool unknownInterfaceMatches, const OwnerLookup &ownerOf)
 {
-    if (!globMatch(pattern.service, target.service) || !globMatch(pattern.method, target.method))
+    if (!globMatch(pattern.method, target.method))
         return false;
-    if (target.interface.isEmpty())
-        return unknownInterfaceMatches || pattern.interface == QLatin1String("*");
-    return globMatch(pattern.interface, target.interface);
+    if (target.interface.isEmpty()) {
+        if (!unknownInterfaceMatches && pattern.interface != QLatin1String("*"))
+            return false;
+    } else if (!globMatch(pattern.interface, target.interface)) {
+        return false;
+    }
+    if (globMatch(pattern.service, target.service))
+        return true;
+    if (!ownerOf || pattern.service.contains(QLatin1Char('*')))
+        return false;
+    const QString destination = ownerOf(target.service);
+    return !destination.isEmpty() && destination == ownerOf(pattern.service);
 }

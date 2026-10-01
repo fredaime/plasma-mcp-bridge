@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include <functional>
+
 // One dbus_call as the policy sees it. `interface` is empty when it is
 // unknown: not given, and the introspection data does not name exactly one
 // interface declaring the method.
@@ -50,9 +52,14 @@ public:
     // False when the bus or the destination alone is refused: the caller
     // then skips resolving the interface (no round-trip for a refused call).
     bool destinationAllowed(const QString &bus, const QString &service) const;
+    // The unique name owning a bus name, empty when none. With it, a refusing
+    // rule on a well-known name also matches the other names of the same
+    // connection (D-Bus delivers to the connection, not to the name).
+    using OwnerLookup = std::function<QString(const QString &name)>;
+
     // Order: system bus, unique name, --deny, --allow, built-in denylist,
     // --default-deny.
-    PolicyDecision evaluate(const CallTarget &target) const;
+    PolicyDecision evaluate(const CallTarget &target, const OwnerLookup &ownerOf = {}) const;
 
     // Error text returned to the agent for a refused call.
     static QString refusal(const PolicyDecision &decision);
@@ -72,7 +79,7 @@ private:
     };
     static bool parsePattern(const QString &text, Pattern *out);
     static bool matches(const Pattern &pattern, const CallTarget &target,
-                        bool unknownInterfaceMatches);
+                        bool unknownInterfaceMatches, const OwnerLookup &ownerOf);
 
     bool m_allowSystemBus = false;
     bool m_allowUniqueNames = false;
