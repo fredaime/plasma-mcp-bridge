@@ -38,6 +38,10 @@ class Demarshall(FixtureTestCase):
         self.assertEqual(self.ret('RetEmptyAS'), [])
         self.assertEqual(self.ret('RetEmptyMapAS'), {})
 
+    def test_empty_top_level_byte_array(self):
+        reply = self.bridge().call('dbus_call', dict(ECHO, method='RetEmptyAY'))
+        self.assertEqual(reply, ('', False))
+
     def test_big_map(self):
         reply = self.ret('RetBigASV', timeout=5.0)
         self.assertEqual(len(reply), 5000)
@@ -71,6 +75,12 @@ class Demarshall(FixtureTestCase):
 
     def test_map_int_key(self):
         self.assertEqual(self.ret('RetMapIS'), {'1': 'a', '2': 'b'})
+
+    def test_map_bool_key(self):
+        self.assertEqual(self.ret('RetMapBS'), {'true': 'y', 'false': 'n'})
+
+    def test_map_byte_key_is_a_number(self):
+        self.assertEqual(self.ret('RetMapYS'), {'0': 'a', '65': 'b', '200': 'c'})
 
 
 if __name__ == '__main__':

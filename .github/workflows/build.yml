@@ -37,4 +37,6 @@ jobs:
           echo "$out" | grep -q '"name":"dbus_call"'
 
       - name: Tests
-        run: ctest --test-dir build --output-on-failure
+        # --no-tests=error: if the test dependencies went missing, CMake only
+        # warns and registers no test; fail instead of reporting success.
+        run: ctest --test-dir build --output-on-failure --no-tests=error

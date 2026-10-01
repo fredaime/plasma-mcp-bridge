@@ -127,6 +127,8 @@ class Echo(dbus.service.Object):
     def RetEmptyAS(self): return dbus.Array([], signature='s')
     @dbus.service.method(IFACE, in_signature='', out_signature='a{sas}')
     def RetEmptyMapAS(self): return dbus.Dictionary({}, signature='sas')
+    @dbus.service.method(IFACE, in_signature='', out_signature='ay')
+    def RetEmptyAY(self): return dbus.ByteArray(b'')
     # M7: non-string map keys
     @dbus.service.method(IFACE, in_signature='', out_signature='a{oas}')
     def RetMapOAS(self): return {dbus.ObjectPath('/p'): ['x']}
@@ -134,6 +136,10 @@ class Echo(dbus.service.Object):
     def RetMapGAS(self): return {dbus.Signature('a{sv}'): ['x']}
     @dbus.service.method(IFACE, in_signature='', out_signature='a{is}')
     def RetMapIS(self): return {1: 'a', 2: 'b'}
+    @dbus.service.method(IFACE, in_signature='', out_signature='a{bs}')
+    def RetMapBS(self): return {True: 'y', False: 'n'}
+    @dbus.service.method(IFACE, in_signature='', out_signature='a{ys}')
+    def RetMapYS(self): return {dbus.Byte(0): 'a', dbus.Byte(65): 'b', dbus.Byte(200): 'c'}
 
     # --- Slow ---------------------------------------------------------------
     @dbus.service.method(IFACE, in_signature='d', out_signature='s',
