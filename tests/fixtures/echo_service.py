@@ -103,6 +103,8 @@ class Echo(_OtherInterface):
     def RetU(self): return dbus.UInt32(123456789)
     @dbus.service.method(IFACE, in_signature='', out_signature='x')
     def RetX(self): return dbus.Int64(4000000)
+    @dbus.service.method(IFACE, in_signature='', out_signature='ax')
+    def RetAXBig(self): return [2 ** 53, 2 ** 53 + 1, -(2 ** 53 + 1)]
     @dbus.service.method(IFACE, in_signature='', out_signature='d')
     def RetD(self): return dbus.Double(3.14159265)
     @dbus.service.method(IFACE, in_signature='', out_signature='t')

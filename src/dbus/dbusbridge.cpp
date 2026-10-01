@@ -186,6 +186,9 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     if (value.canConvert<QDBusArgument>())
         return demarshall(value.value<QDBusArgument>());
 
+    if (value.metaType() == QMetaType::fromType<QDBusUnixFileDescriptor>())
+        return QStringLiteral("<unix fd: not transferable over MCP>");
+
     switch (value.typeId()) {
     case QMetaType::Bool:
         return value.toBool();
@@ -196,8 +199,16 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     case QMetaType::UShort:
     case QMetaType::UChar:
     case QMetaType::UInt:
-    case QMetaType::LongLong:
         return static_cast<qint64>(value.toLongLong());
+    case QMetaType::LongLong: {
+        // Beyond +-2^53 a JSON number no longer holds the value exactly
+        // (clients parse numbers as doubles): emit the exact decimal string.
+        const qlonglong x = value.toLongLong();
+        const qlonglong limit = Q_INT64_C(1) << 53;
+        if (x >= -limit && x <= limit)
+            return static_cast<qint64>(x);
+        return QString::number(x);
+    }
     case QMetaType::ULongLong: {
         // Beyond 2^53 a JSON number no longer holds the value exactly (clients
         // parse numbers as doubles): emit the exact decimal string instead.
