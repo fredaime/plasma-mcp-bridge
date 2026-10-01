@@ -94,5 +94,69 @@ class Discovery(ModernTestCase):
         self.assertNotIn('resultType', reply['result'])
 
 
+def call_args(**arguments):
+    return {'name': 'dbus_call', 'arguments': arguments}
+
+
+class ModernTools(ModernTestCase):
+
+    def test_tools_list(self):
+        session = self.bridge(initialize=False)
+        result = self.assertModernResult(self.modern('tools/list', session=session))
+        self.assertEqual(result['ttlMs'], 0)
+        self.assertEqual(result['cacheScope'], 'public')
+        self.assertNotIn('nextCursor', result)
+        self.assertEqual(result['tools'], session.request('tools/list')['result']['tools'])
+        for tool in result['tools']:
+            self.assertEqual(tool['inputSchema']['type'], 'object', tool['name'])
+
+    def test_cursor_is_refused(self):
+        self.assertError(self.modern('tools/list', {'cursor': 'x'}), -32602)
+
+    def test_tools_call(self):
+        result = self.assertModernResult(self.modern('tools/call',
+                                                     call_args(**ECHO, method='RetU')))
+        self.assertEqual(result['content'], [{'type': 'text', 'text': '123456789'}])
+        self.assertIs(result['isError'], False)
+        self.assertNotIn('ttlMs', result)
+
+    def test_tool_error_is_a_complete_result(self):
+        result = self.assertModernResult(self.modern('tools/call',
+                                                     call_args(service=ECHO['service'])))
+        self.assertIs(result['isError'], True)
+
+    def test_unknown_tool(self):
+        self.assertError(self.modern('tools/call', {'name': 'no_such_tool'}), -32602)
+
+    def test_eras_coexist(self):
+        session = self.bridge(initialize=False)
+        self.assertModernResult(self.modern('tools/call', call_args(**ECHO, method='RetU'),
+                                            session=session))
+        session.request('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
+                                       'clientInfo': {'name': 'tests', 'version': '0'}})
+        reply = session.request('tools/call', call_args(**ECHO, method='RetU'))
+        self.assertNotIn('resultType', reply['result'])
+        self.assertModernResult(self.modern('tools/call', call_args(**ECHO, method='RetU'),
+                                            session=session))
+        self.assertModernResult(self.modern('server/discover', session=session))
+
+    def test_cancelled_call_sends_nothing(self):
+        session = self.bridge(initialize=False)
+        body = call_args(**ECHO, method='Slow', args=[1])
+        body['_meta'] = meta()
+        rid = session.start('tools/call', body)
+        session.send({'jsonrpc': '2.0', 'method': 'notifications/cancelled',
+                      'params': {'requestId': rid}})
+        session.expect_silence(1.5)
+
+    def test_log_level_emits_no_log_notification(self):
+        session = self.bridge(initialize=False)
+        self.assertModernResult(self.modern('tools/call', call_args(**ECHO, method='RetU'),
+                                            session=session,
+                                            **{'io.modelcontextprotocol/logLevel': 'debug'}))
+        self.assertEqual(session.unsolicited, [])
+        session.expect_silence(0.5)
+
+
 if __name__ == '__main__':
     unittest.main()

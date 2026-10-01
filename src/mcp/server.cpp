@@ -156,7 +156,7 @@ void Server::onMessage(const QJsonObject &message)
     } else if (name == QLatin1String("tools/list")) {
         handleToolsList(id);
     } else if (name == QLatin1String("tools/call")) {
-        handleToolsCall(id, params);
+        handleToolsCall(id, params, false);
     } else {
         m_transport->send(mcp::jsonrpc::makeError(
             id, mcp::jsonrpc::MethodNotFound, QStringLiteral("Method not found: %1").arg(name)));
@@ -169,12 +169,15 @@ void Server::handleNotification(const QString &method, const QJsonObject &params
     if (method != QLatin1String("notifications/cancelled"))
         return;
     const QJsonValue requestId = params.value(QStringLiteral("requestId"));
-    if (m_runner->cancel(requestId))
+    if (m_runner->cancel(requestId)) {
+        // A cancelled call never produces a result: forget its era too.
+        m_modernCalls.remove(mcp::jsonrpc::idText(requestId));
         qInfo("plasma-mcp-bridge: cancelled request %s",
               qUtf8Printable(mcp::jsonrpc::idText(requestId)));
-    else
+    } else {
         qInfo("plasma-mcp-bridge: ignoring cancellation of request %s (unknown or finished)",
               qUtf8Printable(mcp::jsonrpc::idText(requestId)));
+    }
 }
 
 // Checks in this order (F0, section f): the version (-32022 if not served),
@@ -210,6 +213,10 @@ void Server::handleModernRequest(const QJsonValue &id, const QString &method,
 
     if (method == QLatin1String("server/discover")) {
         handleDiscover(id);
+    } else if (method == QLatin1String("tools/list")) {
+        handleModernToolsList(id, params);
+    } else if (method == QLatin1String("tools/call")) {
+        handleToolsCall(id, params, true);
     } else {
         // ping and logging/setLevel do not exist in 2026-07-28.
         m_transport->send(mcp::jsonrpc::makeError(
@@ -230,6 +237,21 @@ void Server::handleDiscover(const QJsonValue &id)
     result.insert(QStringLiteral("capabilities"), capabilities);
     // The tool list never changes while the bridge runs, but it depends on the
     // installation (plugins): no caching across processes (D3).
+    result.insert(QStringLiteral("ttlMs"), 0);
+    result.insert(QStringLiteral("cacheScope"), QStringLiteral("public"));
+    m_transport->send(mcp::jsonrpc::makeResult(id, modernResult(result)));
+}
+
+void Server::handleModernToolsList(const QJsonValue &id, const QJsonObject &params)
+{
+    if (params.contains(QStringLiteral("cursor"))) {
+        m_transport->send(mcp::jsonrpc::makeError(
+            id, mcp::jsonrpc::InvalidParams,
+            QStringLiteral("Invalid cursor: plasma-mcp-bridge does not paginate")));
+        return;
+    }
+    QJsonObject result;
+    result.insert(QStringLiteral("tools"), m_registry->toJson());
     result.insert(QStringLiteral("ttlMs"), 0);
     result.insert(QStringLiteral("cacheScope"), QStringLiteral("public"));
     m_transport->send(mcp::jsonrpc::makeResult(id, modernResult(result)));
@@ -260,7 +282,7 @@ void Server::handleToolsList(const QJsonValue &id)
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }
 
-void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
+void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params, bool modern)
 {
     if (m_closing) {
         qInfo("plasma-mcp-bridge: ignoring request %s: shutting down",
@@ -285,8 +307,10 @@ void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
         return;
     }
 
-    m_runner->submit(id, tool, arguments.toObject(),
-                     m_serializedTools.contains(name.toString()));
+    if (m_runner->submit(id, tool, arguments.toObject(),
+                         m_serializedTools.contains(name.toString()))
+        && modern)
+        m_modernCalls.insert(mcp::jsonrpc::idText(id));
 }
 
 void Server::sendToolResult(const QJsonValue &id, const QString &text, bool isError)
@@ -298,6 +322,8 @@ void Server::sendToolResult(const QJsonValue &id, const QString &text, bool isEr
     QJsonObject result;
     result.insert(QStringLiteral("content"), QJsonArray{content});
     result.insert(QStringLiteral("isError"), isError);
+    if (m_modernCalls.remove(mcp::jsonrpc::idText(id)))
+        result = modernResult(result);
 
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }

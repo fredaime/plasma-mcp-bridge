@@ -46,12 +46,14 @@ private:
     void handleDiscover(const QJsonValue &id);
     void handleInitialize(const QJsonValue &id, const QJsonObject &params);
     void handleToolsList(const QJsonValue &id);
-    void handleToolsCall(const QJsonValue &id, const QJsonValue &params);
+    void handleToolsCall(const QJsonValue &id, const QJsonValue &params, bool modern);
+    void handleModernToolsList(const QJsonValue &id, const QJsonObject &params);
     void sendToolResult(const QJsonValue &id, const QString &text, bool isError);
 
     StdioTransport *m_transport;
     ToolRegistry *m_registry;
     ToolRunner *m_runner;
     QSet<QString> m_serializedTools;
+    QSet<QString> m_modernCalls; // idText of the modern tools/call in flight
     bool m_closing = false;
 };
