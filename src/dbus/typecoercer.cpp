@@ -52,6 +52,17 @@ bool parseInteger(const QJsonValue &value, ParsedInteger *out, QString *error)
         *error = QStringLiteral("expected an integer, got %1").arg(jsonText(value));
         return false;
     }
+    // An integer that fits in int64 is held exactly by Qt's JSON parser, even
+    // where toDouble() would round it (e.g. INT64_MAX). toInteger() returns it
+    // whatever the default; two different defaults detect "not such a value".
+    const qint64 exactA = value.toInteger(0);
+    const qint64 exactB = value.toInteger(1);
+    if (exactA == exactB) {
+        out->negative = exactA < 0;
+        out->magnitude = exactA < 0 ? static_cast<quint64>(-(exactA + 1)) + 1
+                                    : static_cast<quint64>(exactA);
+        return true;
+    }
     const double d = value.toDouble();
     if (!std::isfinite(d) || std::floor(d) != d) {
         *error = QStringLiteral("%1 is not an integer").arg(jsonText(value));
@@ -62,9 +73,8 @@ bool parseInteger(const QJsonValue &value, ParsedInteger *out, QString *error)
                                 "pass it as a decimal string").arg(jsonText(value));
         return false;
     }
-    // toInteger(), not the double: an integer such as 9007199254740993 is
-    // stored exactly by the JSON parser but not representable as a double.
-    const qint64 exact = value.toInteger();
+    // Fallback only: integral values within int64 were handled exactly above.
+    const qint64 exact = static_cast<qint64>(d);
     out->negative = exact < 0;
     out->magnitude = exact < 0 ? static_cast<quint64>(-(exact + 1)) + 1
                                : static_cast<quint64>(exact);

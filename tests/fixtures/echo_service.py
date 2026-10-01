@@ -194,6 +194,37 @@ class Echo(_OtherInterface):
         return {'LastSet': Echo.last_set}
 
 
+NESTED_XML = '''<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.freedesktop.DBus.Introspectable">
+    <method name="Introspect"><arg name="data" type="s" direction="out"/></method>
+  </interface>
+  <interface name="org.plasmamcp.Parent">
+    <method name="Nested"><arg type="u" direction="in"/><arg type="s" direction="out"/></method>
+  </interface>
+  <node name="child">
+    <interface name="org.plasmamcp.Child">
+      <method name="Nested"><arg type="s" direction="in"/><arg type="s" direction="out"/></method>
+    </interface>
+  </node>
+</node>'''
+
+
+class Nested(dbus.service.Object):
+    """Introspection data with a full child description (allowed by the spec):
+    the child's interfaces must not be attributed to this object."""
+
+    @dbus.service.method('org.freedesktop.DBus.Introspectable', in_signature='', out_signature='s')
+    def Introspect(self):
+        return NESTED_XML
+
+    @dbus.service.method('org.plasmamcp.Parent', in_signature='u', out_signature='s',
+                         message_keyword='msg')
+    def Nested(self, a, msg=None):
+        return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
+
+
 def main():
     if os.environ.get('PLASMA_MCP_TEST_BUS') != os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
         sys.exit('echo_service: refusing to own names outside the private test bus '
@@ -202,6 +233,7 @@ def main():
     bus = dbus.SessionBus()
     name = dbus.service.BusName(NAME, bus, do_not_queue=True)  # noqa: F841 (keeps the name)
     Echo(bus, '/Echo')
+    Nested(bus, '/Nested')
     print('READY ' + NAME, flush=True)
     GLib.MainLoop().run()
 

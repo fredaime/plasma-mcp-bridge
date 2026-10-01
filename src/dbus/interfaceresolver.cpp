@@ -13,11 +13,20 @@ MethodResolution resolveMethodFromXml(const QString &xml, const QString &interfa
     MethodResolution current;
     QString currentInterface;
     bool inMethod = false;
+    int nodeDepth = 0; // 1 = the introspected object; deeper = child descriptions
 
     QXmlStreamReader reader(xml);
     while (!reader.atEnd()) {
         reader.readNext();
-        if (reader.isStartElement()) {
+        if (reader.isStartElement() && reader.name() == QLatin1String("node")) {
+            ++nodeDepth;
+        } else if (reader.isEndElement() && reader.name() == QLatin1String("node")) {
+            --nodeDepth;
+        } else if (nodeDepth > 1) {
+            // A child node may carry a full description of its own
+            // interfaces; they do not belong to the introspected object.
+            continue;
+        } else if (reader.isStartElement()) {
             const QXmlStreamAttributes attributes = reader.attributes();
             if (reader.name() == QLatin1String("interface")) {
                 currentInterface = attributes.value(QLatin1String("name")).toString();

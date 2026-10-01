@@ -43,6 +43,11 @@ class Coercion(FixtureTestCase):
         # Qt keeps JSON integers that fit in int64 exactly: no rounding to 2^53.
         self.assertSent('EchoX', 9007199254740993, 'x|[dbus.Int64(9007199254740993)]')
 
+    def test_int64_bounds_as_numbers(self):
+        # toDouble() rounds these to +-2^63; Qt still holds them exactly.
+        self.assertSent('EchoX', 9223372036854775807, 'x|[dbus.Int64(9223372036854775807)]')
+        self.assertSent('EchoX', -9223372036854775808, 'x|[dbus.Int64(-9223372036854775808)]')
+
     def test_uint64_beyond_int64_needs_a_string(self):
         reply = self.echo('EchoT', 18446744073709551615)
         self.assertTrue(reply.is_error)

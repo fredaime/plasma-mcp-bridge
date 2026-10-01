@@ -26,6 +26,11 @@ class CallPath(FixtureTestCase):
         reply = self.call(**NO_IFACE, interface='org.plasmamcp.Other', method='Dup', args=[5])
         self.assertTrue(reply.text.startswith('org.plasmamcp.Other|'), reply.text)
 
+    def test_child_node_interfaces_are_ignored(self):
+        # /Nested declares Nested(u) itself and Nested(s) only on its child node.
+        reply = self.call(service=ECHO['service'], path='/Nested', method='Nested', args=[5])
+        self.assertEqual(reply, ("org.plasmamcp.Parent|u|[dbus.UInt32(5)]", False))
+
     def test_void_with_interface_is_null(self):
         self.assertEqual(self.call(**ECHO, method='RetVoid'), ('null', False))
 
