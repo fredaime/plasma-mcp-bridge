@@ -114,6 +114,18 @@ cmake --build build           # -> build/bin/plasma-mcp-bridge
 sudo cmake --install build    # installs the binary + a D-Bus service file
 ```
 
+### Tests
+
+The test-suite runs on a throw-away private D-Bus (it never touches your
+session or system bus) and needs `dbus-run-session` (package `dbus-daemon`),
+`python3-dbus` and `python3-gi`:
+
+```sh
+cmake --build build && ctest --test-dir build --output-on-failure
+```
+
+Without those packages the tests are skipped with a CMake warning.
+
 ## Connect it to an agent
 
 The server is launched by the MCP client over stdio. Add it to your client's MCP

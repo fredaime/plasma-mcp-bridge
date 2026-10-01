@@ -23,8 +23,17 @@ cmake --build build               # build -> build/bin/plasma-mcp-bridge
 DESTDIR=/tmp/stage cmake --install build   # stage install to inspect output
 ```
 
-There is no unit-test suite yet. Smoke-test the protocol by piping
-newline-delimited JSON-RPC into the binary (stdout is protocol, stderr is logs):
+Tests: `ctest --test-dir build --output-on-failure`. Each module in `tests/`
+is a Python `unittest` run by `tests/run_with_bus.sh` on a private session bus
+(no activatable services; the system bus is redirected onto it). Fixtures live
+in `tests/fixtures/` (`echo_service.py` is the D-Bus oracle: `Echo*` methods
+return the wire signature they received, `Ret*` methods return typed values).
+`tests/mcp_session.py` is the MCP client; a reply that misses its deadline is a
+test failure and kills the bridge. New test module = one new line in the
+`_tests` list of `tests/CMakeLists.txt`. Assert on D-Bus error *names*, never
+on error messages (they differ between dbus-daemon and dbus-broker).
+
+Quick manual smoke test (stdout is protocol, stderr is logs):
 
 ```sh
 printf '%s\n' \
@@ -112,3 +121,6 @@ Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
 - The MCP protocol version the server advertises lives in `kDefaultProtocolVersion`
   in `src/mcp/server.cpp`; the build stamps the package version via the
   `PLASMA_MCP_BRIDGE_VERSION` compile definition (set in `src/CMakeLists.txt`).
+- The code must build with `-Werror` on Qt 6.4 (CI) and on current Qt. Do not
+  use `qAsConst`, `_qs` or `Q_FOREACH`; deprecation warnings are pinned to the
+  6.4 level in the top-level `CMakeLists.txt`.
