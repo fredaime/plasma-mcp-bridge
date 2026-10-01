@@ -450,7 +450,7 @@ class Variants(FixtureTestCase):
                          ('v|[dbus.Int64(5000000000, variant_level=1)]', False))
         self.assertEqual(self.send('EchoV', {'k': 1, 'l': ['x']}),
                          ("v|[dbus.Dictionary({dbus.String('k'): dbus.Int32(1, variant_level=1), "
-                          "dbus.String('l'): dbus.Array([dbus.String('x', variant_level=2)], "
+                          "dbus.String('l'): dbus.Array([dbus.String('x', variant_level=1)], "
                           "signature=dbus.Signature('v'), variant_level=1)}, "
                           "signature=dbus.Signature('sv'), variant_level=1)]", False))
 

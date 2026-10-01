@@ -19,6 +19,7 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <tuple>
@@ -197,63 +198,101 @@ bool coerceByteArray(const QJsonValue &value, QVariant *out, QString *error)
 
 // ------------------------------------------------------------ signatures
 
-constexpr int kMaxDepth = 64; // D-Bus allows 32 array plus 32 struct levels
+// D-Bus limits (specification): beyond them libdbus aborts the process, or
+// the bus drops the connection, instead of returning an error.
+constexpr int kMaxArrayDepth = 32;
+constexpr int kMaxStructDepth = 32; // dict entries included
+constexpr int kMaxSignatureLength = 255;
+constexpr int kMaxMessageDepth = 64; // containers of a message, variants included
 
 bool isBasicType(QChar type)
 {
     return QStringLiteral("ybnqiuxtdsogh").contains(type);
 }
 
-// End of the complete type that starts at `pos`, or -1 when `sig` is
-// malformed there.
-qsizetype completeTypeEnd(const QString &sig, qsizetype pos, int depth)
+struct TypeScan {
+    qsizetype end = -1; // -1: malformed, or beyond the D-Bus limits
+    int depth = 0;      // containers the type nests
+};
+
+// The complete type that starts at `pos`, inside `arrays` arrays and
+// `structs` structs or dict entries.
+TypeScan scanType(const QString &sig, qsizetype pos, int arrays, int structs)
 {
-    if (pos >= sig.size() || depth > kMaxDepth)
-        return -1;
+    TypeScan scan;
+    if (pos >= sig.size())
+        return scan;
     const QChar type = sig.at(pos);
-    if (isBasicType(type) || type == QLatin1Char('v'))
-        return pos + 1;
+    if (isBasicType(type) || type == QLatin1Char('v')) {
+        scan.end = pos + 1;
+        return scan;
+    }
     if (type == QLatin1Char('a')) {
+        if (arrays + 1 > kMaxArrayDepth)
+            return scan;
         if (pos + 1 < sig.size() && sig.at(pos + 1) == QLatin1Char('{')) {
             const qsizetype key = pos + 2;
-            if (key >= sig.size() || !isBasicType(sig.at(key)))
-                return -1;
-            const qsizetype end = completeTypeEnd(sig, key + 1, depth + 1);
-            if (end < 0 || end >= sig.size() || sig.at(end) != QLatin1Char('}'))
-                return -1;
-            return end + 1;
+            if (structs + 1 > kMaxStructDepth || key >= sig.size() || !isBasicType(sig.at(key)))
+                return scan;
+            const TypeScan value = scanType(sig, key + 1, arrays + 1, structs + 1);
+            if (value.end < 0 || value.end >= sig.size() || sig.at(value.end) != QLatin1Char('}'))
+                return scan;
+            scan.end = value.end + 1;
+            scan.depth = value.depth + 2;
+            return scan;
         }
-        return completeTypeEnd(sig, pos + 1, depth + 1);
+        const TypeScan element = scanType(sig, pos + 1, arrays + 1, structs);
+        if (element.end < 0)
+            return scan;
+        scan.end = element.end;
+        scan.depth = element.depth + 1;
+        return scan;
     }
     if (type == QLatin1Char('(')) {
+        if (structs + 1 > kMaxStructDepth)
+            return scan;
         qsizetype p = pos + 1;
         int fields = 0;
+        int deepest = 0;
         while (p < sig.size() && sig.at(p) != QLatin1Char(')')) {
-            p = completeTypeEnd(sig, p, depth + 1);
-            if (p < 0)
-                return -1;
+            const TypeScan field = scanType(sig, p, arrays, structs + 1);
+            if (field.end < 0)
+                return scan;
+            p = field.end;
+            deepest = std::max(deepest, field.depth);
             ++fields;
         }
         if (p >= sig.size() || fields == 0)
-            return -1;
-        return p + 1;
+            return scan;
+        scan.end = p + 1;
+        scan.depth = deepest + 1;
+        return scan;
     }
-    return -1;
+    return scan;
 }
 
-// The complete types of `sig`, in order; empty when `sig` is malformed.
+// The complete types of `sig`, in order; empty when `sig` is malformed or
+// beyond the D-Bus limits.
 QStringList splitTypes(const QString &sig)
 {
+    if (sig.size() > kMaxSignatureLength)
+        return {};
     QStringList types;
     qsizetype p = 0;
     while (p < sig.size()) {
-        const qsizetype end = completeTypeEnd(sig, p, 0);
+        const qsizetype end = scanType(sig, p, 0, 0).end;
         if (end < 0)
             return {};
         types.append(sig.mid(p, end - p));
         p = end;
     }
     return types;
+}
+
+// Containers a complete type nests (its struct/array/dict-entry levels).
+int typeDepth(const QString &sig)
+{
+    return scanType(sig, 0, 0, 0).depth;
 }
 
 bool isSingleCompleteType(const QString &sig)
@@ -409,7 +448,7 @@ bool coerceBasic(const QJsonValue &value, QChar type, QVariant *out, QString *er
             *out = QVariant::fromValue(QDBusObjectPath(value.toString()));
         } else {
             const QString signature = value.toString();
-            if (signature.size() > 255 || (!signature.isEmpty() && splitTypes(signature).isEmpty())) {
+            if (!signature.isEmpty() && splitTypes(signature).isEmpty()) {
                 *error = QStringLiteral("%1 is not a valid D-Bus signature").arg(jsonText(value));
                 return false;
             }
@@ -456,31 +495,36 @@ QString prefixed(const QString &where, const QString &error)
 QString checkValue(const QJsonValue &value, const QString &sig, int depth);
 
 // What a variant may hold: {"@dbus": "<type>", "value": …} for an explicit
-// type, otherwise the natural mapping of the JSON value.
+// type, otherwise the natural mapping of the JSON value. `depth` counts the
+// containers open around the value, this variant included.
 QString checkVariant(const QJsonValue &value, int depth)
 {
-    if (depth > kMaxDepth)
-        return QStringLiteral("nested deeper than %1 levels").arg(kMaxDepth);
+    if (depth > kMaxMessageDepth)
+        return QStringLiteral("nested deeper than %1 D-Bus containers").arg(kMaxMessageDepth);
     const QJsonObject object = value.toObject();
     if (value.isObject() && object.contains(QStringLiteral("@dbus"))) {
         const QJsonValue inner = object.value(QStringLiteral("@dbus"));
         if (!isSingleCompleteType(inner.toString()))
             return QStringLiteral("%1 is not a single complete D-Bus type").arg(jsonText(inner));
-        return checkValue(object.value(QStringLiteral("value")), inner.toString(), depth + 1);
+        if (depth + typeDepth(inner.toString()) > kMaxMessageDepth)
+            return QStringLiteral("nested deeper than %1 D-Bus containers").arg(kMaxMessageDepth);
+        return checkValue(object.value(QStringLiteral("value")), inner.toString(), depth);
     }
     switch (value.type()) {
     case QJsonValue::Array: {
+        // 'av': an array, then a variant per item.
         const QJsonArray array = value.toArray();
         for (int i = 0; i < array.size(); ++i) {
-            const QString error = checkVariant(array.at(i), depth + 1);
+            const QString error = checkVariant(array.at(i), depth + 2);
             if (!error.isEmpty())
                 return prefixed(QStringLiteral("[%1]").arg(i), error);
         }
         return QString();
     }
     case QJsonValue::Object:
+        // 'a{sv}': an array, a dict entry, then a variant per value.
         for (auto it = object.begin(); it != object.end(); ++it) {
-            const QString error = checkVariant(it.value(), depth + 1);
+            const QString error = checkVariant(it.value(), depth + 3);
             if (!error.isEmpty())
                 return prefixed(QStringLiteral("['%1']").arg(it.key()), error);
         }
@@ -494,11 +538,13 @@ QString checkVariant(const QJsonValue &value, int depth)
 }
 
 // Pass 1: checks `value` against the complete type `sig`; returns the error,
-// empty when the value can be written. Builds nothing.
+// empty when the value can be written. Builds nothing. `depth` counts the
+// D-Bus containers open around the value (a map entry sits in two: the
+// array and the dict entry).
 QString checkValue(const QJsonValue &value, const QString &sig, int depth)
 {
-    if (depth > kMaxDepth)
-        return QStringLiteral("nested deeper than %1 levels").arg(kMaxDepth);
+    if (depth > kMaxMessageDepth)
+        return QStringLiteral("nested deeper than %1 D-Bus containers").arg(kMaxMessageDepth);
     const QChar type = sig.at(0);
     if (sig.size() == 1 && isBasicType(type)) {
         QVariant unused;
@@ -536,7 +582,7 @@ QString checkValue(const QJsonValue &value, const QString &sig, int depth)
             QString error;
             if (!coerceBasic(keyValue(it.key(), key), key, &unused, &error))
                 return prefixed(QStringLiteral("key '%1'").arg(it.key()), error);
-            error = checkValue(it.value(), valueSig, depth + 1);
+            error = checkValue(it.value(), valueSig, depth + 2);
             if (!error.isEmpty())
                 return prefixed(QStringLiteral("['%1']").arg(it.key()), error);
         }
@@ -617,7 +663,7 @@ QVariant variantContent(const QJsonValue &value)
         QVariantList list;
         const QJsonArray array = value.toArray();
         for (const QJsonValue &item : array)
-            list.append(QVariant::fromValue(QDBusVariant(variantContent(item))));
+            list.append(variantContent(item)); // QtDBus sends each item as a variant
         return list;
     }
     if (value.isObject()) {

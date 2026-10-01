@@ -254,6 +254,9 @@ on the object — and checked in full before anything is sent:
   notification's `urgency` hint. `Properties.Set` gives its value the type the
   interface declares for the property.
 - Unix file descriptors (`h`) cannot travel over MCP and are refused.
+- D-Bus limits are enforced before sending: at most 32 nested arrays and 32
+  nested structs per signature, 255 characters per signature, 64 nested
+  containers per message (variants included).
 
 When the method cannot be resolved (no introspection data, or the name is
 declared by several interfaces and `interface` is omitted), arguments take the

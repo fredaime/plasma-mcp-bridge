@@ -18,12 +18,38 @@
 #include <QJsonObject>
 #include <QMetaType>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace {
 // What QtDBus waits by default (its -1).
 constexpr int kDefaultCallTimeoutMs = 25000;
+
+// D-Bus allows 64 nested containers in a message, variants included; the bus
+// drops the connection of a sender that goes deeper.
+constexpr int kMaxMessageDepth = 64;
+
+// Containers the natural mapping of `value` nests, starting from `depth`: an
+// array is an 'av' (array, then a variant per item), an object an 'a{sv}'
+// (array, dict entry, then a variant per value). Stops counting once the
+// limit is passed.
+int naturalDepth(const QJsonValue &value, int depth)
+{
+    if (depth > kMaxMessageDepth)
+        return depth;
+    int deepest = depth;
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            deepest = std::max(deepest, naturalDepth(item, depth + 2));
+    } else if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it)
+            deepest = std::max(deepest, naturalDepth(it.value(), depth + 3));
+    }
+    return deepest;
+}
 } // namespace
 
 DBusBridge::DBusBridge() = default;
@@ -119,10 +145,19 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
             callArgs[2] = QJsonObject{{QStringLiteral("@dbus"), type},
                                       {QStringLiteral("value"), args.at(2)}};
     }
+    // libdbus aborts on a message signature beyond 255 characters.
+    if (typed && resolution.inSignature.join(QString()).size() > 255)
+        return DBusResult::failure(
+            QStringLiteral("the method's signature is longer than 255 characters"));
     QVariantList variantArgs;
     variantArgs.reserve(args.size());
     for (int i = 0; i < args.size(); ++i) {
         if (!typed) {
+            if (naturalDepth(callArgs.at(i), 0) > kMaxMessageDepth)
+                return DBusResult::failure(
+                    QStringLiteral("argument %1: nested deeper than %2 D-Bus containers")
+                        .arg(i)
+                        .arg(kMaxMessageDepth));
             variantArgs.append(jsonToVariant(callArgs.at(i)));
             continue;
         }

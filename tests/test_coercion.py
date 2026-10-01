@@ -229,7 +229,7 @@ class Variants(FixtureTestCase):
                          ('v|[dbus.Int64(5000000000, variant_level=1)]', False))
         self.assertEqual(self.send('EchoV', {'k': 1, 'l': ['x']}),
                          ("v|[dbus.Dictionary({dbus.String('k'): dbus.Int32(1, variant_level=1), "
-                          "dbus.String('l'): dbus.Array([dbus.String('x', variant_level=2)], "
+                          "dbus.String('l'): dbus.Array([dbus.String('x', variant_level=1)], "
                           "signature=dbus.Signature('v'), variant_level=1)}, "
                           "signature=dbus.Signature('sv'), variant_level=1)]", False))
 
@@ -405,6 +405,72 @@ class Fuzz(FixtureTestCase):
                     self.assertTrue(reply.text.startswith('v|'), reply.text)
         self.assertIsNone(session.proc.poll())
         self.assertGreater(successes, 40)
+
+
+def nested_list(levels):
+    value = 1
+    for _ in range(levels):
+        value = [value]
+    return value
+
+
+class Limits(FixtureTestCase):
+    """D-Bus limits: 32 nested arrays, 32 nested structs (dict entries
+    included), 255-character signatures, 64 nested containers in a message
+    (variants included). Beyond them libdbus aborts the process or the bus
+    drops the connection: the bridge must refuse first and keep answering."""
+
+    def setUp(self):
+        self.session = self.bridge()
+
+    def still_connected(self):
+        self.assertEqual(self.session.call('dbus_call', dict(ECHO, method='RetU')),
+                         ('123456789', False))
+
+    def call(self, method, value, **target):
+        arguments = dict(ECHO, method=method, args=[value])
+        arguments.update(target)
+        return self.session.call('dbus_call', arguments)
+
+    def test_signatures_beyond_the_limits(self):
+        deep_struct = '(' * 33 + 'i' + ')' * 33
+        deep_array = 'a' * 33 + 'i'
+        wide_struct = '(' + 'i' * 300 + ')'
+        for sig in (deep_struct, deep_array, wide_struct):
+            with self.subTest(sig=sig[:40]):
+                reply = self.call('EchoV', {'@dbus': sig, 'value': []})
+                self.assertTrue(reply.is_error, reply.text)
+                self.assertIn('is not a single complete D-Bus type', reply.text)
+                self.still_connected()
+        for sig in (deep_struct, deep_array, 'i' * 256):
+            with self.subTest(g=sig[:40]):
+                reply = self.call('EchoG', sig)
+                self.assertTrue(reply.is_error, reply.text)
+                self.assertIn('is not a valid D-Bus signature', reply.text)
+                self.still_connected()
+
+    def test_signatures_at_the_limits(self):
+        reply = self.call('EchoV', {'@dbus': '(' * 32 + 'i' + ')' * 32, 'value': nested_list(32)})
+        self.assertFalse(reply.is_error, reply.text)
+        reply = self.call('EchoG', '(' * 32 + 'i' + ')' * 32)
+        self.assertFalse(reply.is_error, reply.text)
+
+    def test_deep_natural_variant(self):
+        reply = self.call('EchoV', nested_list(40))
+        self.assertTrue(reply.is_error, reply.text)
+        self.assertIn('nested deeper than 64 D-Bus containers', reply.text)
+        self.still_connected()
+        reply = self.call('EchoV', nested_list(20))
+        self.assertFalse(reply.is_error, reply.text)
+
+    def test_deep_untyped_argument(self):
+        loose = {'path': '/Loose', 'method': 'EchoAny'}
+        reply = self.session.call('dbus_call', dict(ECHO, args=[nested_list(40)], **loose))
+        self.assertTrue(reply.is_error, reply.text)
+        self.assertIn('nested deeper than 64 D-Bus containers', reply.text)
+        self.still_connected()
+        reply = self.session.call('dbus_call', dict(ECHO, args=[nested_list(20)], **loose))
+        self.assertFalse(reply.is_error, reply.text)
 
 
 if __name__ == '__main__':
