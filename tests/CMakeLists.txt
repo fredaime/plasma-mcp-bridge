@@ -36,6 +36,7 @@ set(_tests
     test_policy
     test_protocol
     test_async
+    test_modern
 )
 
 foreach(_test IN LISTS _tests)

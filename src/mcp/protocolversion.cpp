@@ -11,6 +11,11 @@ QStringList supportedProtocolVersions()
             QStringLiteral("2025-11-25")};
 }
 
+QStringList modernProtocolVersions()
+{
+    return {QStringLiteral("2026-07-28")};
+}
+
 QString negotiateProtocolVersion(const QJsonValue &requested)
 {
     const QStringList supported = supportedProtocolVersions();

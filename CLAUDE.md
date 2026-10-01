@@ -62,6 +62,9 @@ Layers under `src/` (include paths are rooted at `src/`, so headers are included
     `QSocketNotifier` and writes responses to stdout. **Nothing else may write to
     stdout** — it would corrupt the protocol stream; use `qInfo/qWarning` (stderr).
   - `Server` (main thread) validates frames (`-32700`/`-32600`/`-32602`),
+    routes each request to its era (modern 2026-07-28 when `params._meta` names a
+    protocol version, `initialize` always legacy — see
+    `docs/superpowers/specs/2026-10-01-remediation-core-design.md` §7.1),
     negotiates the protocol version (`mcp/protocolversion.*`), answers
     `initialize`, `ping`, `tools/list` and notifications at once, and hands
     each `tools/call` to `ToolRunner` (`mcp/toolrunner.*`): built-in tools on
@@ -160,9 +163,11 @@ Consume the ABI with `find_package(PlasmaMcpBridge REQUIRED)` +
   JSON-heavy code stays readable). `KDECompilerSettings` is deliberately omitted
   from CMake for the same reason; `KDEInstallDirs` and `KDECMakeSettings` are used.
 - Source files carry a one-line `// SPDX-License-Identifier: MIT` header.
-- The MCP protocol versions the server speaks live in
-  `src/mcp/protocolversion.cpp`; the build stamps the package version via the
-  `PLASMA_MCP_BRIDGE_VERSION` compile definition (set in `src/CMakeLists.txt`).
+- The MCP protocol versions live in `src/mcp/protocolversion.cpp`: the legacy
+  list negotiated by `initialize`, and the modern list served per request (never
+  mix them: 2026-07-28 has no `initialize`). The build stamps the package
+  version via the `PLASMA_MCP_BRIDGE_VERSION` compile definition (set in
+  `src/CMakeLists.txt`).
 - The code must build with `-Werror` on Qt 6.4 (CI) and on current Qt. Do not
   use `qAsConst`, `_qs` or `Q_FOREACH`; deprecation warnings are pinned to the
   6.4 level in the top-level `CMakeLists.txt`.

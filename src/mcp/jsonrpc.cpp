@@ -37,4 +37,13 @@ QString idText(const QJsonValue &id)
     return QString::fromUtf8(json.mid(1, json.size() - 2));
 }
 
+QJsonObject makeNotification(const QString &method, const QJsonObject &params)
+{
+    QJsonObject msg;
+    msg.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
+    msg.insert(QStringLiteral("method"), method);
+    msg.insert(QStringLiteral("params"), params);
+    return msg;
+}
+
 } // namespace mcp::jsonrpc

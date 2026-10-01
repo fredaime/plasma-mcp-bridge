@@ -404,6 +404,55 @@ version moderne inconnue → `-32022` avec la liste ; `tools/list`/`tools/call` 
 `ttlMs`, `cacheScope`) ; coexistence moderne et historique sur un même processus ; sonde dual-era puis
 repli `initialize` d'un client historique ; liste issue de F0 couverte cas par cas.
 
+### 7.1 Résultats de F0 (2026-10-02) et décisions
+
+F0 a été mené sur les sources officielles (`modelcontextprotocol/modelcontextprotocol` @ `3f6e5e17`) ;
+la liste complète (126 exigences citées, F-1 à F-126) est dans
+`docs/superpowers/specs/2026-10-02-mcp-2026-07-28-f0.md`. Elle **corrige** les points ci-dessus :
+
+- Les deux champs obligatoires sont dans `params._meta` : `io.modelcontextprotocol/protocolVersion`
+  (chaîne) et **`io.modelcontextprotocol/clientCapabilities`** (objet, `{}` permis) — pas
+  `clientCapabilities` tout court. Absent ou mal typé → `-32602` (MUST).
+- `DiscoverResult` exige `resultType`, `supportedVersions`, `capabilities`, **`ttlMs` (≥ 0) et
+  `cacheScope`** ; pas de `serverInfo` ni de `protocolVersion` à la racine : l'identité va dans
+  `_meta["io.modelcontextprotocol/serverInfo"]`, que les serveurs SHOULD mettre dans **chaque**
+  résultat moderne. `tools/list` porte aussi `ttlMs`/`cacheScope` ; `tools/call` non.
+- `-32022` a deux champs obligatoires dans `data` : `supported` et `requested`. Toute méthode
+  moderne fait le contrôle de version, `server/discover` compris (la sonde d'un client dual-era doit
+  recevoir `-32022`, pas `-32601`).
+- `initialize` est réglé : un serveur dual-era y répond normalement, en sémantique historique limitée
+  au processus ; la négociation historique ne doit **pas** contenir `2026-07-28` (deux listes
+  distinctes). Rien de ce qu'`initialize` établit n'influence les requêtes modernes (MUST NOT).
+- Retirés en moderne : `ping`, `logging/setLevel`, `notifications/roots/list_changed` → `-32601` ;
+  `ping` reste servi aux requêtes historiques. Ne jamais déclarer `logging` ni émettre
+  `notifications/message`.
+- Annulation sur stdio : le serveur **MUST NOT** envoyer quoi que ce soit pour une requête annulée
+  (déjà le cas depuis la PR6).
+- Codes d'erreur : dans `-32020…-32099`, seuls les trois codes définis ; jamais `-32002`/`-32042`.
+- `subscriptions/listen` est un motif de base (« All implementations MUST support … the message
+  patterns ») ; MRTR (`InputRequiredResult`) est facultatif pour un serveur d'outils qui n'a jamais
+  besoin d'entrée.
+
+**Décisions (ambiguïtés du texte, cf. F0 « Open decisions »)** :
+- **D1** — `supportedVersions` et `data.supported` ne listent que les versions utilisables par requête :
+  `["2026-07-28"]`. Une requête moderne qui porte une version historique (`2025-11-25`) reçoit `-32022`
+  (sinon un client relancerait en boucle avec une version que le chemin moderne ne sert pas).
+- **D2** — `subscriptions/listen` minimal : accusé `notifications/subscriptions/acknowledged` avec
+  `notifications: {}` (le bridge n'a aucune notification à offrir, la liste d'outils ne change pas
+  pendant la vie du processus) et `_meta["io.modelcontextprotocol/subscriptionId"]` = id de la requête ;
+  le flux reste ouvert sans réponse ; `notifications/cancelled` du client le ferme sans rien envoyer ;
+  à l'arrêt, résultat de clôture (`resultType: "complete"`, même `_meta`) puis
+  `notifications/cancelled` (les deux pages l'exigent chacune).
+- **D3** — `ttlMs: 0`, `cacheScope: "public"` (la liste ne dépend pas de l'utilisateur ; 0 évite toute
+  question de cache entre configurations).
+- **D4** — `io.modelcontextprotocol/logLevel` est ignoré (le bridge n'émet jamais de log MCP).
+- **Aiguillage** : une requête est moderne si `params._meta` contient la clé
+  `io.modelcontextprotocol/protocolVersion` ; `initialize` est toujours historique ; une requête sans
+  cette clé suit le cycle historique (§6), avec ou sans `initialize` préalable.
+- **Ordre des contrôles** : version (`-32602` si non chaîne, `-32022` si non supportée), puis
+  capacités client (`-32602`), puis méthode (`-32601`), puis paramètres (`-32602`). `cursor` sur
+  `tools/list` → `-32602` (le bridge ne pagine pas).
+
 ## 8. ABI et compatibilité
 
 - Aucun en-tête installé ne change de structure : pas de membre ajouté à `DBusBridge`, `ToolRegistry`

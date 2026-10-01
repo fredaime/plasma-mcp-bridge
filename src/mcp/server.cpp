@@ -21,6 +21,40 @@
 namespace {
 // How long results are still written after the client went away.
 constexpr int kDrainMs = 2000;
+
+constexpr auto kMetaProtocolVersion = "io.modelcontextprotocol/protocolVersion";
+constexpr auto kMetaClientCapabilities = "io.modelcontextprotocol/clientCapabilities";
+constexpr auto kMetaServerInfo = "io.modelcontextprotocol/serverInfo";
+constexpr auto kMetaSubscriptionId = "io.modelcontextprotocol/subscriptionId";
+
+QJsonObject serverInfo()
+{
+    QJsonObject info;
+    info.insert(QStringLiteral("name"), QStringLiteral("plasma-mcp-bridge"));
+    info.insert(QStringLiteral("version"), QStringLiteral(PLASMA_MCP_BRIDGE_VERSION));
+    return info;
+}
+
+// A 2026-07-28 request names its protocol version in params._meta. An
+// initialize never is one, whatever it carries: it only exists in the legacy
+// era, and a dual-era server answers it there.
+bool isModernRequest(const QString &method, const QJsonObject &params)
+{
+    return method != QLatin1String("initialize")
+        && params.value(QStringLiteral("_meta"))
+               .toObject()
+               .contains(QLatin1String(kMetaProtocolVersion));
+}
+
+// Every 2026-07-28 result: its resultType, and the server's identity in _meta.
+QJsonObject modernResult(QJsonObject result)
+{
+    result.insert(QStringLiteral("resultType"), QStringLiteral("complete"));
+    QJsonObject meta = result.value(QStringLiteral("_meta")).toObject();
+    meta.insert(QLatin1String(kMetaServerInfo), serverInfo());
+    result.insert(QStringLiteral("_meta"), meta);
+    return result;
+}
 } // namespace
 
 Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *parent)
@@ -48,6 +82,7 @@ void Server::shutdown()
     if (m_closing)
         return;
     m_closing = true;
+    closeSubscriptions();
     if (m_runner->inFlight() == 0) {
         Q_EMIT finished();
         return;
@@ -103,10 +138,15 @@ void Server::onMessage(const QJsonObject &message)
         handleNotification(name, params.toObject());
         return;
     }
-    if (m_runner->isInFlight(id)) {
+    if (m_runner->isInFlight(id) || m_listens.contains(mcp::jsonrpc::idText(id))) {
         // Exactly one response per id: the call already running keeps it.
         qInfo("plasma-mcp-bridge: ignoring request %s: a request with this id is still in flight",
               qUtf8Printable(mcp::jsonrpc::idText(id)));
+        return;
+    }
+
+    if (isModernRequest(name, params.toObject())) {
+        handleModernRequest(id, name, params.toObject());
         return;
     }
 
@@ -117,7 +157,7 @@ void Server::onMessage(const QJsonObject &message)
     } else if (name == QLatin1String("tools/list")) {
         handleToolsList(id);
     } else if (name == QLatin1String("tools/call")) {
-        handleToolsCall(id, params);
+        handleToolsCall(id, params, false);
     } else {
         m_transport->send(mcp::jsonrpc::makeError(
             id, mcp::jsonrpc::MethodNotFound, QStringLiteral("Method not found: %1").arg(name)));
@@ -130,12 +170,135 @@ void Server::handleNotification(const QString &method, const QJsonObject &params
     if (method != QLatin1String("notifications/cancelled"))
         return;
     const QJsonValue requestId = params.value(QStringLiteral("requestId"));
-    if (m_runner->cancel(requestId))
+    if (m_listens.remove(mcp::jsonrpc::idText(requestId))) {
+        qInfo("plasma-mcp-bridge: closed subscription %s",
+              qUtf8Printable(mcp::jsonrpc::idText(requestId)));
+        return;
+    }
+    if (m_runner->cancel(requestId)) {
+        // A cancelled call never produces a result: forget its era too.
+        m_modernCalls.remove(mcp::jsonrpc::idText(requestId));
         qInfo("plasma-mcp-bridge: cancelled request %s",
               qUtf8Printable(mcp::jsonrpc::idText(requestId)));
-    else
+    } else {
         qInfo("plasma-mcp-bridge: ignoring cancellation of request %s (unknown or finished)",
               qUtf8Printable(mcp::jsonrpc::idText(requestId)));
+    }
+}
+
+// Checks in this order (F0, section f): the version (-32022 if not served),
+// the client capabilities (-32602), the method (-32601), then its params.
+void Server::handleModernRequest(const QJsonValue &id, const QString &method,
+                                 const QJsonObject &params)
+{
+    const QJsonObject meta = params.value(QStringLiteral("_meta")).toObject();
+    const QJsonValue version = meta.value(QLatin1String(kMetaProtocolVersion));
+    if (!version.isString()) {
+        m_transport->send(mcp::jsonrpc::makeError(
+            id, mcp::jsonrpc::InvalidParams,
+            QStringLiteral("_meta[\"io.modelcontextprotocol/protocolVersion\"] must be a string")));
+        return;
+    }
+    const QStringList supported = mcp::modernProtocolVersions();
+    if (!supported.contains(version.toString())) {
+        QJsonObject data;
+        data.insert(QStringLiteral("supported"), QJsonArray::fromStringList(supported));
+        data.insert(QStringLiteral("requested"), version);
+        m_transport->send(mcp::jsonrpc::makeError(id, mcp::jsonrpc::UnsupportedProtocolVersion,
+                                                  QStringLiteral("Unsupported protocol version"),
+                                                  data));
+        return;
+    }
+    if (!meta.value(QLatin1String(kMetaClientCapabilities)).isObject()) {
+        m_transport->send(mcp::jsonrpc::makeError(
+            id, mcp::jsonrpc::InvalidParams,
+            QStringLiteral(
+                "_meta[\"io.modelcontextprotocol/clientCapabilities\"] must be an object")));
+        return;
+    }
+
+    if (method == QLatin1String("server/discover")) {
+        handleDiscover(id);
+    } else if (method == QLatin1String("tools/list")) {
+        handleModernToolsList(id, params);
+    } else if (method == QLatin1String("tools/call")) {
+        handleToolsCall(id, params, true);
+    } else if (method == QLatin1String("subscriptions/listen")) {
+        handleListen(id);
+    } else {
+        // ping and logging/setLevel do not exist in 2026-07-28.
+        m_transport->send(mcp::jsonrpc::makeError(
+            id, mcp::jsonrpc::MethodNotFound, QStringLiteral("Method not found: %1").arg(method)));
+    }
+}
+
+void Server::handleDiscover(const QJsonValue &id)
+{
+    QJsonObject tools;
+    tools.insert(QStringLiteral("listChanged"), false);
+    QJsonObject capabilities;
+    capabilities.insert(QStringLiteral("tools"), tools);
+
+    QJsonObject result;
+    result.insert(QStringLiteral("supportedVersions"),
+                  QJsonArray::fromStringList(mcp::modernProtocolVersions()));
+    result.insert(QStringLiteral("capabilities"), capabilities);
+    // The tool list never changes while the bridge runs, but it depends on the
+    // installation (plugins): no caching across processes (D3).
+    result.insert(QStringLiteral("ttlMs"), 0);
+    result.insert(QStringLiteral("cacheScope"), QStringLiteral("public"));
+    m_transport->send(mcp::jsonrpc::makeResult(id, modernResult(result)));
+}
+
+void Server::handleModernToolsList(const QJsonValue &id, const QJsonObject &params)
+{
+    if (params.contains(QStringLiteral("cursor"))) {
+        m_transport->send(mcp::jsonrpc::makeError(
+            id, mcp::jsonrpc::InvalidParams,
+            QStringLiteral("Invalid cursor: plasma-mcp-bridge does not paginate")));
+        return;
+    }
+    QJsonObject result;
+    result.insert(QStringLiteral("tools"), m_registry->toJson());
+    result.insert(QStringLiteral("ttlMs"), 0);
+    result.insert(QStringLiteral("cacheScope"), QStringLiteral("public"));
+    m_transport->send(mcp::jsonrpc::makeResult(id, modernResult(result)));
+}
+
+// The bridge has no notification to offer (its tools never change while it
+// runs): the acknowledgment lists none, and the stream stays open, without a
+// response, until the client cancels it or the bridge shuts down (D2).
+void Server::handleListen(const QJsonValue &id)
+{
+    if (m_closing)
+        return;
+    m_listens.insert(mcp::jsonrpc::idText(id), id);
+    QJsonObject meta;
+    meta.insert(QLatin1String(kMetaSubscriptionId), id);
+    QJsonObject params;
+    params.insert(QStringLiteral("_meta"), meta);
+    params.insert(QStringLiteral("notifications"), QJsonObject{});
+    m_transport->send(
+        mcp::jsonrpc::makeNotification(QStringLiteral("notifications/subscriptions/acknowledged"),
+                                       params));
+}
+
+// A completion result, then notifications/cancelled: the subscriptions page
+// asks for the first, the cancellation page for the second.
+void Server::closeSubscriptions()
+{
+    for (auto it = m_listens.cbegin(); it != m_listens.cend(); ++it) {
+        QJsonObject meta;
+        meta.insert(QLatin1String(kMetaSubscriptionId), it.value());
+        QJsonObject result;
+        result.insert(QStringLiteral("_meta"), meta);
+        m_transport->send(mcp::jsonrpc::makeResult(it.value(), modernResult(result)));
+        QJsonObject cancelled;
+        cancelled.insert(QStringLiteral("requestId"), it.value());
+        m_transport->send(
+            mcp::jsonrpc::makeNotification(QStringLiteral("notifications/cancelled"), cancelled));
+    }
+    m_listens.clear();
 }
 
 void Server::handleInitialize(const QJsonValue &id, const QJsonObject &params)
@@ -148,14 +311,10 @@ void Server::handleInitialize(const QJsonValue &id, const QJsonObject &params)
     QJsonObject capabilities;
     capabilities.insert(QStringLiteral("tools"), toolsCapability);
 
-    QJsonObject serverInfo;
-    serverInfo.insert(QStringLiteral("name"), QStringLiteral("plasma-mcp-bridge"));
-    serverInfo.insert(QStringLiteral("version"), QStringLiteral(PLASMA_MCP_BRIDGE_VERSION));
-
     QJsonObject result;
     result.insert(QStringLiteral("protocolVersion"), protocolVersion);
     result.insert(QStringLiteral("capabilities"), capabilities);
-    result.insert(QStringLiteral("serverInfo"), serverInfo);
+    result.insert(QStringLiteral("serverInfo"), serverInfo());
 
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }
@@ -167,7 +326,7 @@ void Server::handleToolsList(const QJsonValue &id)
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }
 
-void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
+void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params, bool modern)
 {
     if (m_closing) {
         qInfo("plasma-mcp-bridge: ignoring request %s: shutting down",
@@ -192,8 +351,10 @@ void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
         return;
     }
 
-    m_runner->submit(id, tool, arguments.toObject(),
-                     m_serializedTools.contains(name.toString()));
+    if (m_runner->submit(id, tool, arguments.toObject(),
+                         m_serializedTools.contains(name.toString()))
+        && modern)
+        m_modernCalls.insert(mcp::jsonrpc::idText(id));
 }
 
 void Server::sendToolResult(const QJsonValue &id, const QString &text, bool isError)
@@ -205,6 +366,8 @@ void Server::sendToolResult(const QJsonValue &id, const QString &text, bool isEr
     QJsonObject result;
     result.insert(QStringLiteral("content"), QJsonArray{content});
     result.insert(QStringLiteral("isError"), isError);
+    if (m_modernCalls.remove(mcp::jsonrpc::idText(id)))
+        result = modernResult(result);
 
     m_transport->send(mcp::jsonrpc::makeResult(id, result));
 }
