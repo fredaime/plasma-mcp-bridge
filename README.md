@@ -227,16 +227,37 @@ Discover what KWin exposes, then call it:
 
 A method without return value — like `nextDesktop` above — replies `null`.
 Replies are marshalled back to JSON, including arrays, structs and maps:
-numbers are exact (a `uint64` above 2^53 comes back as a decimal string), byte
-arrays (`ay`) come back as base64 strings, and a value of a type that cannot be
-represented is replaced by `"<unsupported D-Bus type '<signature>'>"`.
+numbers are exact (an integer beyond ±2^53, `int64` or `uint64`, comes back as
+a decimal string), byte arrays (`ay`) come back as base64 strings, a unix file
+descriptor (`h`) as `"<unix fd: not transferable over MCP>"`, and a value of a
+type that cannot be represented is replaced by
+`"<unsupported D-Bus type '<signature>'>"`.
 
 Arguments are converted to the types the method declares in its introspection
 data — also when `interface` is omitted, as long as the method name is unique
-on the object. Integers are range-checked (pass a `uint64` beyond the int64
-range as a decimal string), `ay` accepts an array of bytes or a base64 string,
-and a value that does not fit is rejected before anything is sent. Container
-arguments other than `as`, `ay` and `a{sv}` are not converted yet.
+on the object — and checked in full before anything is sent:
+
+- Integers are range-checked (pass a `uint64` beyond the int64 range as a
+  decimal string); `ay` accepts an array of bytes or a base64 string; `o` and
+  `g` must be a valid object path / signature.
+- Arrays are JSON arrays, maps (`a{…}`) JSON objects (numeric and boolean keys
+  as text), structs JSON arrays with one item per field. Array elements and map
+  values may be basic types, `v`, `as`, `ay`, `av`, `a{sv}`, `ao`, `ag`, arrays
+  of integers, booleans or doubles, `a{ss}`, `aas`, `aay`, `aai`, `aa{sv}`,
+  `a{sa{sv}}`, and the structs `(si)`, `(ss)`, `(sss)`, `(ii)`, `(ai)`,
+  `(oa{sv})`, `(iss)`; anything else is refused with
+  `unsupported D-Bus signature '…'`.
+- A variant (`v`) takes the natural type of the JSON value — boolean `b`,
+  integer `i` (or `x` beyond 32 bits), other number `d`, string `s`, array
+  `av`, object `a{sv}` — unless it is written
+  `{"@dbus": "<type>", "value": …}`, e.g. `{"@dbus": "y", "value": 2}` for a
+  notification's `urgency` hint. `Properties.Set` gives its value the type the
+  interface declares for the property.
+- Unix file descriptors (`h`) cannot travel over MCP and are refused.
+
+When the method cannot be resolved (no introspection data, or the name is
+declared by several interfaces and `interface` is omitted), arguments take the
+natural types above and the service itself rejects a mismatch.
 
 XDG desktop portals (`org.freedesktop.portal.*`) are not usable yet: a portal
 method returns a request handle and delivers its result later in a `Response`

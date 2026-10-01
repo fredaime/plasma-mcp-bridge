@@ -85,7 +85,9 @@ Layers under `src/` (include paths are rooted at `src/`, so headers are included
   replies (arrays, structs, `a{sv}` maps) into JSON. `callMethod` introspects the
   target object on every call (`dbus/interfaceresolver.*`, no cache) to find the
   interface declaring the method and its input signature, converts each argument
-  to that signature (`dbus/typecoercer.*`; strict for basic types, `as`, `ay`), and
+  to that signature (`dbus/typecoercer.*`: driven by the parsed signature, checked in full before
+  anything is built — libdbus aborts on a malformed array; element types come
+  from a written-out table, extended case by case with a test), and
   sends a plain `QDBusMessage::createMethodCall` with the explicit interface —
   never `QDBusInterface`, which rejects the bus daemon and mangles void replies.
   Both units are internal: their headers are not installed.

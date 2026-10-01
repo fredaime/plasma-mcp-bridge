@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Arguments are converted to the declared D-Bus types, strictly (M6)."""
+import random
 import unittest
+
+import dbus
 
 from mcp_session import ECHO, FixtureTestCase
 
@@ -325,6 +328,83 @@ class NaturalMapping(FixtureTestCase):
             'args': [7, -2147483648, 2147483648, 5000000000, 2.5, 'x', True, [1, 2], {'k': 1}]})
         self.assertFalse(reply.is_error, reply.text)
         self.assertEqual(reply.text.split('|')[0], 'iixxdsbava{sv}')
+
+
+def random_signature(rng, depth=0):
+    roll = rng.random()
+    if depth >= 3 or roll < 0.4:
+        return rng.choice('ybnqiuxtdsogvh')
+    if roll < 0.6:
+        return 'a' + random_signature(rng, depth + 1)
+    if roll < 0.75:
+        return 'a{' + rng.choice('sybnqiuxtdog') + random_signature(rng, depth + 1) + '}'
+    return '(' + ''.join(random_signature(rng, depth + 1)
+                         for _ in range(rng.randint(1, 3))) + ')'
+
+
+def random_json(rng, depth=0):
+    roll = rng.random()
+    if depth >= 3 or roll < 0.5:
+        return rng.choice([0, -1, 300, 2 ** 31, 2 ** 63 - 1, 1.5, '', 'x', '/a', 'aGk=',
+                           'a{sv}', True, None])
+    if roll < 0.75:
+        return [random_json(rng, depth + 1) for _ in range(rng.randint(0, 3))]
+    return {rng.choice(['k', '1', 'true', '/p', '@dbus']): random_json(rng, depth + 1)
+            for _ in range(rng.randint(0, 3))}
+
+
+def value_for(rng, sig):
+    """A JSON value of the right shape for `sig`, so the build path runs too."""
+    c = sig[0]
+    if c in 'ynqu':
+        return rng.randint(0, 255)
+    if c in 'ix':
+        return rng.randint(-1000, 1000)
+    if c == 't':
+        return rng.randint(0, 1000)
+    if c == 'b':
+        return rng.random() < 0.5
+    if c == 'd':
+        return rng.random()
+    if c in 'sh':
+        return 'x'
+    if c == 'o':
+        return '/a/b'
+    if c == 'g':
+        return 'a{sv}'
+    if c == 'v':
+        return rng.choice([1, 'x', [1, 2], {'k': True}])
+    if sig.startswith('a{'):
+        keys = {'b': 'true', 'd': '1.5', 'o': '/k', 'g': 's', 's': 'k'}
+        return {keys.get(sig[2], '1'): value_for(rng, sig[3:-1])
+                for _ in range(rng.randint(0, 2))}
+    if c == 'a':
+        return [value_for(rng, sig[1:]) for _ in range(rng.randint(0, 2))]
+    return [value_for(rng, field) for field in dbus.Signature(sig[1:-1])]
+
+
+class Fuzz(FixtureTestCase):
+    """Bounded fuzz (fixed seed): the bridge never dies, every call answers."""
+
+    def test_random_signatures_and_values(self):
+        rng = random.Random(20261001)
+        session = self.bridge()
+        successes = 0
+        for n in range(400):
+            if rng.random() < 0.1:
+                sig = ''.join(rng.choice('ab{}()vsix') for _ in range(rng.randint(1, 6)))
+                value = random_json(rng)
+            else:
+                sig = random_signature(rng)
+                value = value_for(rng, sig) if rng.random() < 0.5 else random_json(rng)
+            with self.subTest(n=n, sig=sig):
+                reply = session.call('dbus_call', dict(ECHO, method='EchoV',
+                                                       args=[{'@dbus': sig, 'value': value}]))
+                if not reply.is_error:
+                    successes += 1
+                    self.assertTrue(reply.text.startswith('v|'), reply.text)
+        self.assertIsNone(session.proc.poll())
+        self.assertGreater(successes, 40)
 
 
 if __name__ == '__main__':
