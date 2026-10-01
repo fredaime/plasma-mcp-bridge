@@ -27,13 +27,16 @@ PROPS = 'org.freedesktop.DBus.Properties'
 
 
 def _echo(signature):
+    """Echo<X>: replies "<wire signature>|<repr of the received args>"."""
+    names = ['a%d' % i for i in range(len(list(dbus.Signature(signature))))]
+
     def decorator(fn):
-        if signature == 'ox':
-            def method(self, a, b, msg=None):
-                return '%s|%r' % (msg.get_signature(), [a, b])
-        else:
-            def method(self, a, msg=None):
-                return '%s|%r' % (msg.get_signature(), [a])
+        namespace = {}
+        # dbus-python needs one named parameter per argument of the signature.
+        exec('def method(self, %s, msg=None):\n'
+             '    return "%%s|%%r" %% (msg.get_signature(), [%s])\n'
+             % (', '.join(names), ', '.join(names)), namespace)
+        method = namespace['method']
         method.__name__ = fn.__name__
         return dbus.service.method(IFACE, in_signature=signature, out_signature='s',
                                    message_keyword='msg')(method)
@@ -92,6 +95,48 @@ class Echo(_OtherInterface):
     def EchoT(self): pass
     @_echo('s')
     def EchoS(self): pass
+    @_echo('i')
+    def EchoI(self): pass
+    @_echo('ai')
+    def EchoAI(self): pass
+    @_echo('ax')
+    def EchoAX(self): pass
+    @_echo('at')
+    def EchoAT(self): pass
+    @_echo('ad')
+    def EchoAD(self): pass
+    @_echo('ab')
+    def EchoAB(self): pass
+    @_echo('g')
+    def EchoG(self): pass
+    @_echo('h')
+    def EchoH(self): pass
+    @_echo('a(si)')
+    def EchoASI(self): pass
+    @_echo('a(ai)')
+    def EchoAStructAI(self): pass
+    @_echo('aas')
+    def EchoAAS(self): pass
+    @_echo('aay')
+    def EchoAAY(self): pass
+    @_echo('aai')
+    def EchoAAI(self): pass
+    @_echo('aa{sv}')
+    def EchoAASV(self): pass
+    @_echo('a{sa{sv}}')
+    def EchoASASV(self): pass
+    @_echo('a{sa{ss}}')
+    def EchoASASS(self): pass
+    @_echo('asaiu')
+    def EchoASAIU(self): pass
+    @_echo('(a(si)v)')
+    def EchoNested(self): pass
+    @_echo('a{iu}')
+    def EchoMapIU(self): pass
+    @_echo('a(sssuda{sv})')
+    def EchoUnsupported(self): pass
+    @_echo('a{s(sssuda{sv})}')
+    def EchoMapUnsupported(self): pass
 
     @dbus.service.method(IFACE, in_signature='u', out_signature='s', message_keyword='msg')
     def EchoIface(self, a, msg=None):

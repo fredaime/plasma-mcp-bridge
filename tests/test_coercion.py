@@ -92,9 +92,185 @@ class Coercion(FixtureTestCase):
         self.assertFalse(reply.is_error, reply.text)
         self.assertTrue(reply.text.startswith('a{sv}|'), reply.text)
 
-    def test_other_containers_still_loose(self):
-        # Converted by PR3b; documents the current scope.
-        self.assertTrue(self.echo('EchoAU', [1, 2]).text.startswith('av|'))
+
+
+SI_A1 = "dbus.Struct((dbus.String('a'), dbus.Int32(1)), signature=None)"
+SI_B2 = "dbus.Struct((dbus.String('b'), dbus.Int32(2)), signature=None)"
+
+
+class Containers(FixtureTestCase):
+
+    def send(self, method, *values):
+        return self.bridge().call('dbus_call', dict(ECHO, method=method, args=list(values)))
+
+    def assertSent(self, method, values, expected):
+        self.assertEqual(self.send(method, *values), (expected, False))
+
+    def test_arrays_of_basic_types(self):
+        self.assertSent('EchoAU', [[1, 2, 3]],
+                        "au|[dbus.Array([dbus.UInt32(1), dbus.UInt32(2), dbus.UInt32(3)], "
+                        "signature=dbus.Signature('u'))]")
+        self.assertSent('EchoAU', [[]], "au|[dbus.Array([], signature=dbus.Signature('u'))]")
+        self.assertSent('EchoAI', [[1, -2, 3]],
+                        "ai|[dbus.Array([dbus.Int32(1), dbus.Int32(-2), dbus.Int32(3)], "
+                        "signature=dbus.Signature('i'))]")
+        self.assertSent('EchoAX', [[-1, 4000000000]],
+                        "ax|[dbus.Array([dbus.Int64(-1), dbus.Int64(4000000000)], "
+                        "signature=dbus.Signature('x'))]")
+        self.assertSent('EchoAT', [[1, '18446744073709551615']],
+                        "at|[dbus.Array([dbus.UInt64(1), dbus.UInt64(18446744073709551615)], "
+                        "signature=dbus.Signature('t'))]")
+        self.assertSent('EchoAD', [[0.5, 2]],
+                        "ad|[dbus.Array([dbus.Double(0.5), dbus.Double(2.0)], "
+                        "signature=dbus.Signature('d'))]")
+        self.assertSent('EchoAB', [[True, False]],
+                        "ab|[dbus.Array([dbus.Boolean(True), dbus.Boolean(False)], "
+                        "signature=dbus.Signature('b'))]")
+
+    def test_maps(self):
+        self.assertSent('EchoASS', [{'k': 'v', 'k2': 'w'}],
+                        "a{ss}|[dbus.Dictionary({dbus.String('k'): dbus.String('v'), "
+                        "dbus.String('k2'): dbus.String('w')}, signature=dbus.Signature('ss'))]")
+        self.assertSent('EchoMapIU', [{'1': 2}],
+                        "a{iu}|[dbus.Dictionary({dbus.Int32(1): dbus.UInt32(2)}, "
+                        "signature=dbus.Signature('iu'))]")
+        self.assertSent('EchoASASV', [{'eth0': {'mtu': 1500, 'up': True}}],
+                        "a{sa{sv}}|[dbus.Dictionary({dbus.String('eth0'): dbus.Dictionary("
+                        "{dbus.String('mtu'): dbus.Int32(1500, variant_level=1), "
+                        "dbus.String('up'): dbus.Boolean(True, variant_level=1)}, "
+                        "signature=dbus.Signature('sv'))}, signature=dbus.Signature('sa{sv}'))]")
+        self.assertSent('EchoASASS', [{'g': {'k': 'v'}}],
+                        "a{sa{ss}}|[dbus.Dictionary({dbus.String('g'): dbus.Dictionary("
+                        "{dbus.String('k'): dbus.String('v')}, signature=dbus.Signature('ss'))}, "
+                        "signature=dbus.Signature('sa{ss}'))]")
+
+    def test_structs(self):
+        self.assertSent('EchoStruct', [['a', 1]], '(si)|[%s]' % SI_A1)
+        self.assertSent('EchoASI', [[['a', 1], ['b', 2]]],
+                        "a(si)|[dbus.Array([%s, %s], signature=dbus.Signature('(si)'))]"
+                        % (SI_A1, SI_B2))
+        self.assertSent('EchoASI', [[]], "a(si)|[dbus.Array([], signature=dbus.Signature('(si)'))]")
+        self.assertSent('EchoAStructAI', [[[[1, 2]], [[3]]]],
+                        "a(ai)|[dbus.Array([dbus.Struct((dbus.Array([dbus.Int32(1), "
+                        "dbus.Int32(2)], signature=dbus.Signature('i')),), signature=None), "
+                        "dbus.Struct((dbus.Array([dbus.Int32(3)], signature=dbus.Signature('i')),"
+                        "), signature=None)], signature=dbus.Signature('(ai)'))]")
+        self.assertSent('EchoOX', ['/a/b', 123], "ox|[dbus.ObjectPath('/a/b'), dbus.Int64(123)]")
+
+    def test_nested_arrays(self):
+        self.assertSent('EchoAAS', [[['a', 'b'], ['c']]],
+                        "aas|[dbus.Array([dbus.Array([dbus.String('a'), dbus.String('b')], "
+                        "signature=dbus.Signature('s')), dbus.Array([dbus.String('c')], "
+                        "signature=dbus.Signature('s'))], signature=dbus.Signature('as'))]")
+        self.assertSent('EchoAAY', [[[104, 105], 'aGk=']],
+                        "aay|[dbus.Array([dbus.Array([dbus.Byte(104), dbus.Byte(105)], "
+                        "signature=dbus.Signature('y')), dbus.Array([dbus.Byte(104), "
+                        "dbus.Byte(105)], signature=dbus.Signature('y'))], "
+                        "signature=dbus.Signature('ay'))]")
+        self.assertSent('EchoAAI', [[[1, 2], [3]]],
+                        "aai|[dbus.Array([dbus.Array([dbus.Int32(1), dbus.Int32(2)], "
+                        "signature=dbus.Signature('i')), dbus.Array([dbus.Int32(3)], "
+                        "signature=dbus.Signature('i'))], signature=dbus.Signature('ai'))]")
+        self.assertSent('EchoAASV', [[{'a': 1}, {'b': 'x'}]],
+                        "aa{sv}|[dbus.Array([dbus.Dictionary({dbus.String('a'): "
+                        "dbus.Int32(1, variant_level=1)}, signature=dbus.Signature('sv')), "
+                        "dbus.Dictionary({dbus.String('b'): dbus.String('x', variant_level=1)}, "
+                        "signature=dbus.Signature('sv'))], signature=dbus.Signature('a{sv}'))]")
+
+    def test_several_arguments(self):
+        self.assertSent('EchoASAIU', [['a'], [1, 2], 7],
+                        "asaiu|[dbus.Array([dbus.String('a')], signature=dbus.Signature('s')), "
+                        "dbus.Array([dbus.Int32(1), dbus.Int32(2)], signature=dbus.Signature('i')), "
+                        "dbus.UInt32(7)]")
+
+    def test_signature_argument(self):
+        self.assertSent('EchoG', ['a{sv}'], "g|[dbus.Signature('a{sv}')]")
+
+    def test_container_rejections(self):
+        cases = [
+            ('EchoAU', [1, -1], 'argument 0 (au): [1]: -1 out of range [0,4294967295]'),
+            ('EchoAU', 5, "argument 0 (au): expected an array for 'au', got 5"),
+            ('EchoStruct', ['a'],
+             'argument 0 ((si)): expected an array of 2 fields for \'(si)\', got ["a"]'),
+            ('EchoASI', [['a', 1], ['b', 'x']],
+             'argument 0 (a(si)): [1]: field 1: "x" is not an integer'),
+            ('EchoASS', {'k': 1}, "argument 0 (a{ss}): ['k']: expected a string, got 1"),
+            ('EchoASS', [1], "argument 0 (a{ss}): expected an object for 'a{ss}', got [1]"),
+            ('EchoMapIU', {'x': 1}, 'argument 0 (a{iu}): key \'x\': "x" is not an integer'),
+            ('EchoH', 0,
+             'argument 0 (h): unix fd arguments are not supported (they cannot travel over MCP)'),
+            ('EchoG', 'a{', 'argument 0 (g): "a{" is not a valid D-Bus signature'),
+        ]
+        for method, value, message in cases:
+            with self.subTest(method=method, value=value):
+                self.assertEqual(self.send(method, value), (message, True))
+
+    def test_unsupported_element(self):
+        self.assertEqual(self.send('EchoUnsupported', []),
+                         ("argument 0 (a(sssuda{sv})): unsupported D-Bus signature "
+                          "'(sssuda{sv})' (array element)", True))
+        self.assertEqual(self.send('EchoMapUnsupported', {}),
+                         ("argument 0 (a{s(sssuda{sv})}): unsupported D-Bus signature "
+                          "'(sssuda{sv})' (map value)", True))
+
+
+class Variants(FixtureTestCase):
+
+    def send(self, method, value):
+        return self.bridge().call('dbus_call', dict(ECHO, method=method, args=[value]))
+
+    def test_natural_variants(self):
+        self.assertEqual(self.send('EchoV', 0.5), ('v|[dbus.Double(0.5, variant_level=1)]', False))
+        self.assertEqual(self.send('EchoV', 7), ('v|[dbus.Int32(7, variant_level=1)]', False))
+        self.assertEqual(self.send('EchoV', 5000000000),
+                         ('v|[dbus.Int64(5000000000, variant_level=1)]', False))
+        self.assertEqual(self.send('EchoV', {'k': 1, 'l': ['x']}),
+                         ("v|[dbus.Dictionary({dbus.String('k'): dbus.Int32(1, variant_level=1), "
+                          "dbus.String('l'): dbus.Array([dbus.String('x', variant_level=2)], "
+                          "signature=dbus.Signature('v'), variant_level=1)}, "
+                          "signature=dbus.Signature('sv'), variant_level=1)]", False))
+
+    def test_explicit_variant_type(self):
+        self.assertEqual(self.send('EchoV', {'@dbus': 'y', 'value': 2}),
+                         ('v|[dbus.Byte(2, variant_level=1)]', False))
+        self.assertEqual(self.send('EchoV', {'@dbus': 'a(si)', 'value': [['a', 1]]}),
+                         ("v|[dbus.Array([%s], signature=dbus.Signature('(si)'), "
+                          "variant_level=1)]" % SI_A1, False))
+        self.assertEqual(self.send('EchoASV', {'n': 1, 's': 'x', 'urg': {'@dbus': 'y', 'value': 2}}),
+                         ("a{sv}|[dbus.Dictionary({dbus.String('n'): dbus.Int32(1, variant_level=1), "
+                          "dbus.String('s'): dbus.String('x', variant_level=1), "
+                          "dbus.String('urg'): dbus.Byte(2, variant_level=1)}, "
+                          "signature=dbus.Signature('sv'))]", False))
+
+    def test_variant_inside_a_struct(self):
+        reply = self.send('EchoNested', [[['a', 1]], {'@dbus': 'a(ai)', 'value': [[[1]]]}])
+        self.assertEqual(reply, (
+            "(a(si)v)|[dbus.Struct((dbus.Array([%s], signature=dbus.Signature('(si)')), "
+            "dbus.Array([dbus.Struct((dbus.Array([dbus.Int32(1)], signature=dbus.Signature('i')),),"
+            " signature=None)], signature=dbus.Signature('(ai)'), variant_level=1)), "
+            "signature=None)]" % SI_A1, False))
+
+    def test_dbus_key_has_no_meaning_elsewhere(self):
+        reply = self.send('EchoASS', {'@dbus': 'y', 'value': 'x'})
+        self.assertFalse(reply.is_error, reply.text)
+        self.assertIn("dbus.String('@dbus'): dbus.String('y')", reply.text)
+
+    def test_variant_rejections(self):
+        cases = [
+            (None, 'argument 0 (v): null cannot be sent in a D-Bus variant'),
+            ([1, [2, 'x'], {'k': None}],
+             "argument 0 (v): [2]: ['k']: null cannot be sent in a D-Bus variant"),
+            ({'@dbus': 'ii', 'value': 1},
+             'argument 0 (v): "ii" is not a single complete D-Bus type'),
+            ({'@dbus': 'y', 'value': 300}, 'argument 0 (v): 300 out of range [0,255]'),
+            ({'@dbus': 'a(sssuda{sv})', 'value': []},
+             "argument 0 (v): unsupported D-Bus signature '(sssuda{sv})' (array element)"),
+        ]
+        for value, message in cases:
+            with self.subTest(value=value):
+                self.assertEqual(self.send('EchoV', value), (message, True))
+        reply = self.send('EchoASV', {'urg': {'@dbus': 'y', 'value': 300}})
+        self.assertEqual(reply, ("argument 0 (a{sv}): ['urg']: 300 out of range [0,255]", True))
 
 
 class NaturalMapping(FixtureTestCase):
