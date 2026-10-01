@@ -2,7 +2,9 @@
 #include "tools/dbustools.h"
 
 #include "core/callpolicy.h"
+#include "dbus/busconnection.h"
 #include "dbus/dbusbridge.h"
+#include "dbus/interfaceresolver.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -215,7 +217,7 @@ QJsonObject DBusCallTool::inputSchema() const
 ToolResult DBusCallTool::call(const QJsonObject &arguments)
 {
     QString bus;
-    const QString busError = selectBus(arguments, m_policy, &bus);
+    const QString busError = busArgument(arguments, &bus);
     if (!busError.isEmpty())
         return ToolResult::failure(busError);
     const QString service = arguments.value(QStringLiteral("service")).toString();
@@ -227,7 +229,22 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
     if (service.isEmpty() || path.isEmpty() || method.isEmpty())
         return ToolResult::failure(QStringLiteral("'service', 'path' and 'method' are required"));
 
-    const DBusResult result = m_bridge->callMethod(bus, service, path, interface, method, args);
+    // The policy judges the interface the call will carry. Without one, the
+    // introspection data may name it; the call is then sent with that
+    // interface explicitly, so what is checked is what is sent.
+    CallTarget target{bus, service, path, interface, method};
+    if (target.interface.isEmpty() && m_policy->destinationAllowed(bus, service)) {
+        const MethodResolution resolution =
+            resolveMethod(busConnection(bus), service, path, QString(), method);
+        if (resolution.state == MethodResolution::Unique)
+            target.interface = resolution.interface;
+    }
+    const PolicyDecision decision = m_policy->evaluate(target);
+    if (!decision.allowed)
+        return ToolResult::failure(CallPolicy::refusal(decision));
+
+    const DBusResult result =
+        m_bridge->callMethod(bus, service, path, target.interface, method, args);
     if (!result.ok)
         return ToolResult::failure(result.error);
     return ToolResult::ok(stringify(result.value));

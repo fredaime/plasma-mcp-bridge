@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "dbus/dbusbridge.h"
 
+#include "dbus/busconnection.h"
 #include "dbus/interfaceresolver.h"
 #include "dbus/typecoercer.h"
 
@@ -24,9 +25,7 @@ DBusBridge::DBusBridge() = default;
 
 QDBusConnection DBusBridge::connection(const QString &busName)
 {
-    if (busName == QLatin1String("system"))
-        return QDBusConnection::systemBus();
-    return QDBusConnection::sessionBus();
+    return busConnection(busName);
 }
 
 bool DBusBridge::registerService(const QString &serviceName)
