@@ -24,6 +24,7 @@ endif()
 # One module per line: each PR adds its own line.
 set(_tests
     test_smoke
+    test_harness
 )
 
 foreach(_test IN LISTS _tests)
