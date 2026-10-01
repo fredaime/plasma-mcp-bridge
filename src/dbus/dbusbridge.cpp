@@ -259,6 +259,12 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
 // that overload assumes the current element is a D-Bus variant ('v') and
 // recurses into it unconditionally — on any other element type the libdbus
 // iterator recursion crashes. So dispatch on the wire signature instead.
+//
+// Returns an invalid QVariant for a wire type we do not know how to read. In
+// that case NOTHING was consumed: every QDBusArgument::operator>> is
+// type-checked and, on a mismatch, returns a default value without advancing
+// the iterator. A blind read here would leave the caller's atEnd() loop
+// spinning forever.
 static QVariant extractBasic(const QDBusArgument &argument)
 {
     const QString signature = argument.currentSignature();
@@ -276,36 +282,69 @@ static QVariant extractBasic(const QDBusArgument &argument)
     case 'o': { QDBusObjectPath v; argument >> v; return QVariant::fromValue(v); }
     case 'g': { QDBusSignature v; argument >> v; return QVariant::fromValue(v); }
     case 'h': { QDBusUnixFileDescriptor v; argument >> v; return QVariant::fromValue(v); }
-    default:   { QString v; argument >> v; return v; } // unreachable: 'v' and
-                // containers are handled by demarshall's other branches
+    case 'a':
+        // QDBusDemarshaller::currentType() reports byte and string arrays as
+        // BasicType (they map to QByteArray / QStringList), so 'ay' and 'as'
+        // land here rather than in the ArrayType branch of demarshall.
+        if (signature == QLatin1String("ay")) { QByteArray v; argument >> v; return v; }
+        if (signature == QLatin1String("as")) { QStringList v; argument >> v; return v; }
+        return QVariant();
+    default:
+        return QVariant();
     }
 }
 
-QJsonValue DBusBridge::demarshall(const QDBusArgument &argument)
+static QJsonValue unsupportedElement(const QString &signature)
+{
+    return QJsonValue(QStringLiteral("<unsupported D-Bus type '%1'>").arg(signature));
+}
+
+// Demarshall the current element into `out`. Returns false when the element
+// was NOT consumed (its wire type is unknown to extractBasic): `out` then
+// holds an explanatory marker and the enclosing container loop must stop,
+// because the iterator did not advance and atEnd() would never become true.
+// Containers always count as consumed (begin*() already moved the parent's
+// iterator past them), so a truncated container is reported as consumed to
+// its parent and the rest of the reply is still decoded.
+static bool demarshallElement(const QDBusArgument &argument, QJsonValue &out)
 {
     switch (argument.currentType()) {
-    case QDBusArgument::BasicType:
-        return variantToJson(extractBasic(argument));
+    case QDBusArgument::BasicType: {
+        const QVariant value = extractBasic(argument);
+        if (!value.isValid()) {
+            out = unsupportedElement(argument.currentSignature());
+            return false;
+        }
+        out = DBusBridge::variantToJson(value);
+        return true;
+    }
     case QDBusArgument::VariantType: {
         QDBusVariant value;
         argument >> value;
-        return variantToJson(value.variant());
+        out = DBusBridge::variantToJson(value.variant());
+        return true;
     }
-    case QDBusArgument::ArrayType: {
-        QJsonArray array;
-        argument.beginArray();
-        while (!argument.atEnd())
-            array.append(demarshall(argument));
-        argument.endArray();
-        return array;
-    }
+    case QDBusArgument::ArrayType:
     case QDBusArgument::StructureType: {
+        const bool isArray = argument.currentType() == QDBusArgument::ArrayType;
         QJsonArray array;
-        argument.beginStructure();
-        while (!argument.atEnd())
-            array.append(demarshall(argument));
-        argument.endStructure();
-        return array;
+        if (isArray)
+            argument.beginArray();
+        else
+            argument.beginStructure();
+        while (!argument.atEnd()) {
+            QJsonValue element;
+            const bool consumed = demarshallElement(argument, element);
+            array.append(element);
+            if (!consumed)
+                break;
+        }
+        if (isArray)
+            argument.endArray();
+        else
+            argument.endStructure();
+        out = array;
+        return true;
     }
     case QDBusArgument::MapType: {
         QJsonObject object;
@@ -313,13 +352,27 @@ QJsonValue DBusBridge::demarshall(const QDBusArgument &argument)
         while (!argument.atEnd()) {
             argument.beginMapEntry();
             const QVariant key = extractBasic(argument); // map keys are basic by spec
-            object.insert(key.toString(), demarshall(argument));
+            QJsonValue value;
+            const bool consumed = key.isValid() && demarshallElement(argument, value);
+            object.insert(key.isValid() ? key.toString() : QStringLiteral("<unsupported key>"),
+                          value);
             argument.endMapEntry();
+            if (!consumed)
+                break;
         }
         argument.endMap();
-        return object;
+        out = object;
+        return true;
     }
     default:
-        return QJsonValue();
+        out = unsupportedElement(argument.currentSignature());
+        return false;
     }
+}
+
+QJsonValue DBusBridge::demarshall(const QDBusArgument &argument)
+{
+    QJsonValue out;
+    demarshallElement(argument, out);
+    return out;
 }

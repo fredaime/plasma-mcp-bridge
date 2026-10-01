@@ -25,6 +25,7 @@ endif()
 set(_tests
     test_smoke
     test_harness
+    test_demarshall
 )
 
 foreach(_test IN LISTS _tests)
