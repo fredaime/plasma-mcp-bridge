@@ -305,7 +305,7 @@ temps répond en 0 ms ; aucun warning sous `QT_FATAL_WARNINGS=1`. Un test de str
 **Timeouts.** `--call-timeout-ms` (défaut 25000) et un argument optionnel `timeout_ms` de `dbus_call`
 (change le schéma de l'outil). Implémentation : surcharge **non virtuelle et sans paramètre par
 défaut** `DBusBridge::callMethod(…, int timeoutMs)` ; l'ancienne signature délègue avec le défaut.
-Le timeout borne un appel D-Bus, pas un outil complet. Décision PR6 : il s'applique à chaque aller-retour, y compris l'introspection qui résout l'interface (pas de timeout d'introspection séparé).
+Le timeout borne un appel D-Bus, pas un outil complet. Décision PR6 : il s'applique à chaque aller-retour, y compris l'introspection qui résout l'interface (pas de timeout d'introspection séparé). Revue finale PR6 : une introspection sans réponse dans le délai (`NoReply`) termine l'appel aussitôt, si bien qu'un service bloqué coûte un seul délai ; les threads des pools ne sont jamais retirés (`setExpiryTimeout(-1)`), un plugin retrouve toujours le même thread.
 
 **Annulation.** `notifications/cancelled` marque l'id annulé s'il est en vol : la tâche encore en file
 est sautée ; une tâche en cours va au bout (un appel D-Bus bloquant n'est pas interruptible) et son

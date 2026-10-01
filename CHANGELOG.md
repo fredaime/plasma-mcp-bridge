@@ -52,7 +52,7 @@ Pre-releases are versioned 0.1.90+.
 - `initialize` negotiates `2024-11-05`, `2025-06-18` or `2025-11-25` (was
   always `2024-11-05`).
 - A tool name registered twice is refused (the first registration wins).
-- Plugin tools run on a worker thread, one at a time.
+- Plugin tools run on a dedicated worker thread, one at a time.
 - On stdin EOF the bridge writes the results that arrive within 2 s, then
   exits with code 0 even if a call is still running.
 

@@ -201,6 +201,37 @@ class DefaultCallTimeout(FixtureTestCase):
         self.assertLess(elapsed, 2.0)
 
 
+class TimeoutOnAHungService(FixtureTestCase):
+    """A service already blocked: the introspection times out too. One test per class."""
+
+    def test_timeout_bounds_the_whole_call(self):
+        blocker = self.bridge()
+        blocker.start('tools/call', tool_call(dict(ECHO, method='SlowBlocking', args=[4])))
+        time.sleep(0.3)
+        session = self.bridge()
+        for arguments in (dict(ECHO, method='RetU', timeout_ms=1000),
+                          {'service': ECHO['service'], 'path': ECHO['path'], 'method': 'RetU',
+                           'timeout_ms': 1000}):
+            with self.subTest(interface='interface' in arguments):
+                started = time.monotonic()
+                reply = session.call('dbus_call', arguments, timeout=5)
+                elapsed = time.monotonic() - started
+                self.assertIn('org.freedesktop.DBus.Error.NoReply', reply.text)
+                self.assertLess(elapsed, 1.6)
+
+
+class PluginThread(FixtureTestCase):
+    fixtures = ()
+
+    def test_plugin_tools_keep_their_thread(self):
+        # Qt retires an idle pool thread after 30 s by default; a plugin's
+        # thread-bound objects would then outlive their thread.
+        session = self.bridge('--plugin', TEST_PLUGIN)
+        self.assertEqual(session.call('test_thread'), ('1', False))
+        time.sleep(31)
+        self.assertEqual(session.call('test_thread'), ('2', False))
+
+
 class TimeoutValues(FixtureTestCase):
 
     def test_invalid_timeout_ms(self):

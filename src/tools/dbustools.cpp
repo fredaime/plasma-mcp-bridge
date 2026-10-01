@@ -304,6 +304,9 @@ ToolResult DBusCallTool::call(const QJsonObject &arguments)
     if (target.interface.isEmpty() && m_policy->destinationAllowed(bus, service)) {
         const MethodResolution resolution =
             resolveMethod(busConnection(bus), service, path, QString(), method, timeoutMs);
+        if (resolution.timedOut())
+            return ToolResult::failure(
+                QStringLiteral("%1: %2").arg(resolution.errorName, resolution.errorMessage));
         if (resolution.state == MethodResolution::Unique)
             target.interface = resolution.interface;
     }

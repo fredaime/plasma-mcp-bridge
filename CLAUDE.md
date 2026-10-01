@@ -65,8 +65,9 @@ Layers under `src/` (include paths are rooted at `src/`, so headers are included
     negotiates the protocol version (`mcp/protocolversion.*`), answers
     `initialize`, `ping`, `tools/list` and notifications at once, and hands
     each `tools/call` to `ToolRunner` (`mcp/toolrunner.*`): built-in tools on
-    a `QThreadPool` of 4, plugin tools on a pool of 1, results posted back to
-    the main thread. Replies may come out of order. On EOF it drains for 2 s,
+    a `QThreadPool` of 4, plugin tools on a pool of 1 (threads never retire,
+    so a plugin always finds the same thread), results posted back to the main
+    thread. Replies may come out of order. On EOF it drains for 2 s,
     then `std::_Exit(0)` if a call still runs (never destroy a pool with a
     running task).
   - `Tool::call()` runs on a worker thread: a tool must not touch

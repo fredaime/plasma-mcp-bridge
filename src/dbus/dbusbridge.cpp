@@ -95,6 +95,9 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
 
     const MethodResolution resolution =
         resolveMethod(bus, service, path, interface, method, timeoutMs);
+    if (resolution.timedOut())
+        return DBusResult::failure(
+            QStringLiteral("%1: %2").arg(resolution.errorName, resolution.errorMessage));
 
     // Typed conversion when the introspection data names exactly one method
     // with this argument count; otherwise the loose mapping (the remote then

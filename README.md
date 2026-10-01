@@ -262,7 +262,10 @@ signal, and the bridge does not receive D-Bus signals.
   dropped. No reply is sent for a cancelled request.
 - Each D-Bus round-trip of `dbus_call` (introspection, then the call) waits at
   most `--call-timeout-ms` (25000 by default) or the call's `timeout_ms`; on
-  expiry the tool error names `org.freedesktop.DBus.Error.NoReply`.
+  expiry the tool error names `org.freedesktop.DBus.Error.NoReply`. A service
+  that does not answer the introspection in time fails the call at once, so a
+  hung service costs one timeout, not one per round-trip. `dbus_list_services`
+  and `dbus_introspect` keep QtDBus's 25 s.
 - Errors: invalid JSON → `-32700`; a frame that is not one request object, a
   null or non-scalar `id`, a missing `method` → `-32600`; unknown method →
   `-32601`; `tools/call` without `name`, with non-object `arguments`, or for an
@@ -282,8 +285,8 @@ independent shared libraries instead of forks.
 A plugin implements `PluginInterface` (in `<core/plugin.h>`)
 and returns one or more `Backend` objects; each backend adds its `Tool`s to the
 registry at startup. The ABI is `org.kde.plasma.mcpbridge.PluginInterface/1.0`.
-A plugin's tools are called on a worker thread, never on the main thread, and
-one at a time (they need not be reentrant). A tool whose name is already
+A plugin's tools are called on a dedicated worker thread — always the same
+one, never the main thread — one at a time (they need not be reentrant). A tool whose name is already
 registered is refused with a warning.
 
 Consume it from CMake with:

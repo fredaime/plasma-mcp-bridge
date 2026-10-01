@@ -75,6 +75,10 @@ MethodResolution resolveMethod(const QDBusConnection &bus, const QString &servic
     if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
         MethodResolution result;
         result.interface = interface;
+        if (reply.type() == QDBusMessage::ErrorMessage) {
+            result.errorName = reply.errorName();
+            result.errorMessage = reply.errorMessage();
+        }
         return result; // Unavailable
     }
     return resolveMethodFromXml(reply.arguments().first().toString(), interface, method);

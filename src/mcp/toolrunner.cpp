@@ -15,6 +15,10 @@ ToolRunner::ToolRunner(QObject *parent)
 {
     m_pool->setMaxThreadCount(4);
     m_serialPool->setMaxThreadCount(1);
+    // Threads never retire: a tool (a plugin's especially) may keep objects
+    // bound to the thread it ran on, and finds the same thread next time.
+    m_pool->setExpiryTimeout(-1);
+    m_serialPool->setExpiryTimeout(-1);
 }
 
 bool ToolRunner::submit(const QJsonValue &id, Tool *tool, const QJsonObject &arguments,

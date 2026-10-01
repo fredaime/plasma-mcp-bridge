@@ -50,6 +50,26 @@ public:
     }
 };
 
+class ThreadTool : public Tool
+{
+public:
+    QString name() const override { return QStringLiteral("test_thread"); }
+    QString description() const override
+    {
+        return QStringLiteral("Test: reply how many calls this thread has run, this one "
+                              "included (thread ids are recycled, a counter is not).");
+    }
+    QJsonObject inputSchema() const override
+    {
+        return QJsonObject{{QStringLiteral("type"), QStringLiteral("object")}};
+    }
+    ToolResult call(const QJsonObject &) override
+    {
+        thread_local int calls = 0;
+        return ToolResult::ok(QString::number(++calls));
+    }
+};
+
 class TestBackend : public Backend
 {
 public:
@@ -60,6 +80,7 @@ public:
         registry->add(std::make_unique<SleepTool>(QStringLiteral("test_sleep_a")));
         registry->add(std::make_unique<SleepTool>(QStringLiteral("test_sleep_b")));
         registry->add(std::make_unique<ClashTool>());
+        registry->add(std::make_unique<ThreadTool>());
     }
 };
 
