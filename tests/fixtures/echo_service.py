@@ -39,7 +39,21 @@ def _echo(signature):
     return decorator
 
 
-class Echo(dbus.service.Object):
+def _dup(interface):
+    """Same member name in two interfaces: calls without an interface are ambiguous."""
+    def Dup(self, a, msg=None):
+        return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
+    return dbus.service.method(interface, in_signature='u', out_signature='s',
+                               message_keyword='msg')(Dup)
+
+
+class _OtherInterface(dbus.service.Object):
+    # dbus-python looks a member up by attribute name, class by class along the
+    # MRO: the second declaration of Dup must live in a base class.
+    Dup = _dup('org.plasmamcp.Other')
+
+
+class Echo(_OtherInterface):
     last_set = 'never'
 
     # --- Echo: what did the bridge send? -------------------------------
@@ -73,6 +87,12 @@ class Echo(dbus.service.Object):
     def EchoB(self): pass
     @_echo('ox')
     def EchoOX(self): pass
+
+    @dbus.service.method(IFACE, in_signature='u', out_signature='s', message_keyword='msg')
+    def EchoIface(self, a, msg=None):
+        return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
+
+    Dup = _dup(IFACE)
 
     # --- Ret: typed replies -------------------------------------------------
     @dbus.service.method(IFACE, in_signature='', out_signature='u')

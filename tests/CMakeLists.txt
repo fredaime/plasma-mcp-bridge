@@ -26,6 +26,7 @@ set(_tests
     test_smoke
     test_harness
     test_demarshall
+    test_call_path
 )
 
 foreach(_test IN LISTS _tests)
