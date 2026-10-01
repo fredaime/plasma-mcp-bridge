@@ -13,6 +13,9 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QSet>
 #include <QTextStream>
 
 #include <memory>
@@ -30,6 +33,15 @@ std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy)
     backends.push_back(std::make_unique<DBusBackend>(policy));
     backends.push_back(std::make_unique<NotificationBackend>());
     return backends;
+}
+
+QSet<QString> toolNames(const ToolRegistry &registry)
+{
+    QSet<QString> names;
+    const QJsonArray tools = registry.toJson();
+    for (const QJsonValue &tool : tools)
+        names.insert(tool.toObject().value(QStringLiteral("name")).toString());
+    return names;
 }
 
 void registerAll(const std::vector<std::unique_ptr<Backend>> &backends,
@@ -114,17 +126,21 @@ int main(int argc, char *argv[])
 
     ToolRegistry registry;
 
-    auto allBackends = builtinBackends(&policy);
+    const auto builtins = builtinBackends(&policy);
+    std::vector<std::unique_ptr<Backend>> pluginBackends;
     PluginLoader loader;
     for (const QString &pluginPath : parser.values(pluginOption)) {
-        if (!loader.load(pluginPath, &allBackends)) {
+        if (!loader.load(pluginPath, &pluginBackends)) {
             qCritical("plasma-mcp-bridge: aborting: plugin %s could not be loaded",
                       qUtf8Printable(pluginPath));
             return 2;
         }
     }
 
-    registerAll(allBackends, &registry, context);
+    registerAll(builtins, &registry, context);
+    const QSet<QString> builtinTools = toolNames(registry);
+    registerAll(pluginBackends, &registry, context);
+    const QSet<QString> pluginTools = toolNames(registry) - builtinTools;
 
     if (parser.isSet(emitSkillOption)) {
         QTextStream out(stdout);
@@ -139,6 +155,7 @@ int main(int argc, char *argv[])
 
     StdioTransport transport;
     Server server(&transport, &registry);
+    server.setSerializedTools(pluginTools);
     QObject::connect(&transport, &StdioTransport::closed, &app, &QCoreApplication::quit);
     transport.start();
 

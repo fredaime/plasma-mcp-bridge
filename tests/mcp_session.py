@@ -73,13 +73,13 @@ class _LineReader:
 
 
 class MCPSession:
-    def __init__(self, *extra_args, initialize=True, protocol_version='2024-11-05'):
+    def __init__(self, *extra_args, initialize=True, protocol_version='2024-11-05', env=None):
         require_private_bus()
         self._stderr = tempfile.TemporaryFile()
         self.proc = subprocess.Popen(
             [os.environ['PLASMA_MCP_BRIDGE'], *extra_args],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr,
-            preexec_fn=_die_with_parent)
+            env=dict(os.environ, **(env or {})), preexec_fn=_die_with_parent)
         self._reader = _LineReader(self.proc.stdout.fileno())
         self._next_id = 1
         self.unsolicited = []
@@ -136,6 +136,30 @@ class MCPSession:
         if reply.is_error:
             raise AssertionError('tool error: ' + reply.text)
         return json.loads(reply.text)
+
+    def start(self, method, params=None, rid=None):
+        """Sends a request without waiting for its reply; returns its id."""
+        if rid is None:
+            rid = self._next_id
+            self._next_id += 1
+        message = {'jsonrpc': '2.0', 'id': rid, 'method': method}
+        if params is not None:
+            message['params'] = params
+        self.send(message)
+        return rid
+
+    def collect(self, count, timeout=2.0):
+        """Reads `count` messages within `timeout`; returns them in arrival order."""
+        deadline = time.monotonic() + timeout
+        return [self.read_message(max(0.0, deadline - time.monotonic())) for _ in range(count)]
+
+    def expect_silence(self, seconds):
+        """Fails if anything arrives on stdout within `seconds`."""
+        try:
+            line = self._reader.readline(time.monotonic() + seconds)
+        except TimeoutError:
+            return
+        raise AssertionError('unexpected message: %s' % line.decode(errors='replace'))
 
     # --- lifecycle ----------------------------------------------------------
     def close(self, timeout=2.0):

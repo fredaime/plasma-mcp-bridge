@@ -6,6 +6,7 @@
 #include "mcp/stdiotransport.h"
 #include "mcp/tool.h"
 #include "mcp/toolregistry.h"
+#include "mcp/toolrunner.h"
 
 #include <QJsonArray>
 
@@ -17,9 +18,16 @@ Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *paren
     : QObject(parent)
     , m_transport(transport)
     , m_registry(registry)
+    , m_runner(new ToolRunner(this))
 {
     connect(m_transport, &StdioTransport::messageReceived, this, &Server::onMessage);
     connect(m_transport, &StdioTransport::invalidFrame, this, &Server::onInvalidFrame);
+    connect(m_runner, &ToolRunner::resultReady, this, &Server::sendToolResult);
+}
+
+void Server::setSerializedTools(const QSet<QString> &names)
+{
+    m_serializedTools = names;
 }
 
 void Server::onInvalidFrame(int code)
@@ -124,8 +132,8 @@ void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
         return;
     }
 
-    const ToolResult result = tool->call(arguments.toObject());
-    sendToolResult(id, result.text, result.isError);
+    m_runner->submit(id, tool, arguments.toObject(),
+                     m_serializedTools.contains(name.toString()));
 }
 
 void Server::sendToolResult(const QJsonValue &id, const QString &text, bool isError)
