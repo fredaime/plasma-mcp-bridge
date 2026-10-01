@@ -20,13 +20,26 @@ struct MethodResolution {
     QString interface;
     // Unique only: one complete D-Bus type per input argument.
     QStringList inSignature;
+    // Set when the introspection itself failed with a D-Bus error.
+    QString errorName;
+    QString errorMessage;
+
+    // The service did not answer the introspection in time: the call would
+    // wait as long again, so callers give up at once (timeout_ms bounds the
+    // whole call on a hung service, not each round-trip).
+    bool timedOut() const
+    {
+        return errorName == QLatin1String("org.freedesktop.DBus.Error.NoReply")
+            || errorName == QLatin1String("org.freedesktop.DBus.Error.Timeout");
+    }
 };
 
 // Pure parser, used by resolveMethod. `interface` may be empty.
 MethodResolution resolveMethodFromXml(const QString &xml, const QString &interface,
                                       const QString &method);
 
-// Introspects service/path (one round-trip, no cache) and resolves `method`.
+// Introspects service/path (one round-trip of at most timeoutMs, no cache)
+// and resolves `method`.
 MethodResolution resolveMethod(const QDBusConnection &bus, const QString &service,
                                const QString &path, const QString &interface,
-                               const QString &method);
+                               const QString &method, int timeoutMs);

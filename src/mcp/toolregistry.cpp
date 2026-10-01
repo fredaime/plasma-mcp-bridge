@@ -6,7 +6,12 @@ void ToolRegistry::add(std::unique_ptr<Tool> tool)
 {
     if (!tool)
         return;
-    m_index.insert(tool->name(), tool.get());
+    const QString name = tool->name();
+    if (m_index.contains(name)) {
+        qWarning("plasma-mcp-bridge: refusing a second tool named '%s'", qUtf8Printable(name));
+        return;
+    }
+    m_index.insert(name, tool.get());
     m_tools.push_back(std::move(tool));
 }
 

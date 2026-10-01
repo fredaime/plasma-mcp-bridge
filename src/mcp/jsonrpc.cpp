@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "mcp/jsonrpc.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+
 namespace mcp::jsonrpc {
 
 QJsonObject makeResult(const QJsonValue &id, const QJsonValue &result)
@@ -26,6 +29,12 @@ QJsonObject makeError(const QJsonValue &id, int code, const QString &message,
     msg.insert(QStringLiteral("id"), id);
     msg.insert(QStringLiteral("error"), error);
     return msg;
+}
+
+QString idText(const QJsonValue &id)
+{
+    const QByteArray json = QJsonDocument(QJsonArray{id}).toJson(QJsonDocument::Compact);
+    return QString::fromUtf8(json.mid(1, json.size() - 2));
 }
 
 } // namespace mcp::jsonrpc

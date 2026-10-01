@@ -11,11 +11,13 @@ class CallPolicy;
 class DBusBackend : public Backend
 {
 public:
-    explicit DBusBackend(const CallPolicy *policy) : m_policy(policy) {}
+    DBusBackend(const CallPolicy *policy, int callTimeoutMs)
+        : m_policy(policy), m_callTimeoutMs(callTimeoutMs) {}
     QString name() const override;
     QString description() const override;
     void registerTools(ToolRegistry *registry, const BridgeContext &context) override;
 
 private:
     const CallPolicy *m_policy;
+    int m_callTimeoutMs;
 };

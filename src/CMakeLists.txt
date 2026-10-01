@@ -8,9 +8,11 @@
 # executable symbols.
 add_library(plasma-mcp-bridge-core SHARED
     mcp/jsonrpc.cpp
+    mcp/protocolversion.cpp
     mcp/stdiotransport.cpp
     mcp/toolregistry.cpp
     mcp/server.cpp
+    mcp/toolrunner.cpp
     dbus/dbusbridge.cpp
     dbus/interfaceresolver.cpp
     dbus/typecoercer.cpp

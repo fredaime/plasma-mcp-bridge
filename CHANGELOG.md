@@ -17,6 +17,11 @@ Pre-releases are versioned 0.1.90+.
 - `interface: "org.freedesktop.DBus"` works for calls to the bus daemon.
 - Arguments `u`, `y`, `n`, `o`, … are sent with the declared type even when
   `interface` is omitted (method name unique on the object).
+- The server no longer blocks during a slow call: `ping` and `tools/list` are
+  answered at once, tool calls run concurrently.
+- A client closing stdout no longer kills the bridge with `SIGPIPE`.
+- Invalid frames get a JSON-RPC error (`-32700`, `-32600`) instead of being
+  dropped with a misleading log line.
 
 ### Changed
 - A reply element whose D-Bus type cannot be represented is replaced by
@@ -43,11 +48,20 @@ Pre-releases are versioned 0.1.90+.
   D-Bus does not allow.
 - A `--plugin` that cannot be loaded makes the bridge exit with code 2 (also
   with `--emit-skill`).
+- Replies to `tools/call` may arrive out of order (they carry the request id).
+- `initialize` negotiates `2024-11-05`, `2025-06-18` or `2025-11-25` (was
+  always `2024-11-05`).
+- A tool name registered twice is refused (the first registration wins).
+- Plugin tools run on a dedicated worker thread, one at a time.
+- On stdin EOF the bridge writes the results that arrive within 2 s, then
+  exits with code 0 even if a call is still running.
 
 ### Added
 - Test-suite on a private D-Bus (`ctest`), see README.
 - `--deny`, `--allow`, `--default-deny`, `--allow-unique-names`; one audit line
   per `dbus_call` on stderr.
+- `notifications/cancelled`; `--call-timeout-ms` and a per-call `timeout_ms`
+  argument to `dbus_call`; `DBusBridge::callMethod(…, int timeoutMs)`.
 
 ### Removed
 - The D-Bus activation file `org.kde.plasma.mcpbridge.service`: activating the

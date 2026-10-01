@@ -66,15 +66,19 @@ MethodResolution resolveMethodFromXml(const QString &xml, const QString &interfa
 
 MethodResolution resolveMethod(const QDBusConnection &bus, const QString &service,
                                const QString &path, const QString &interface,
-                               const QString &method)
+                               const QString &method, int timeoutMs)
 {
     const QDBusMessage call = QDBusMessage::createMethodCall(
         service, path, QStringLiteral("org.freedesktop.DBus.Introspectable"),
         QStringLiteral("Introspect"));
-    const QDBusMessage reply = bus.call(call);
+    const QDBusMessage reply = bus.call(call, QDBus::Block, timeoutMs);
     if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
         MethodResolution result;
         result.interface = interface;
+        if (reply.type() == QDBusMessage::ErrorMessage) {
+            result.errorName = reply.errorName();
+            result.errorMessage = reply.errorMessage();
+        }
         return result; // Unavailable
     }
     return resolveMethodFromXml(reply.arguments().first().toString(), interface, method);

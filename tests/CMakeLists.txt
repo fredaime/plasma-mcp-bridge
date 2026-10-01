@@ -21,6 +21,11 @@ if(NOT DBUS_RUN_SESSION_EXECUTABLE)
     return()
 endif()
 
+# Minimal plugin for test_async (tool scheduling, duplicate tool names).
+add_library(plasma_mcp_test_plugin MODULE plugin/testplugin.cpp)
+target_link_libraries(plasma_mcp_test_plugin PRIVATE PlasmaMcpBridge::PluginInterface)
+set_target_properties(plasma_mcp_test_plugin PROPERTIES PREFIX "")
+
 # One module per line: each PR adds its own line.
 set(_tests
     test_smoke
@@ -29,6 +34,8 @@ set(_tests
     test_call_path
     test_coercion
     test_policy
+    test_protocol
+    test_async
 )
 
 foreach(_test IN LISTS _tests)
@@ -38,5 +45,5 @@ foreach(_test IN LISTS _tests)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(${_test} PROPERTIES
         TIMEOUT 120
-        ENVIRONMENT "PLASMA_MCP_BRIDGE=$<TARGET_FILE:plasma-mcp-bridge>;PYTHONDONTWRITEBYTECODE=1;PLASMA_MCP_BUILD_DIR=${PROJECT_BINARY_DIR};CMAKE_COMMAND=${CMAKE_COMMAND}")
+        ENVIRONMENT "PLASMA_MCP_BRIDGE=$<TARGET_FILE:plasma-mcp-bridge>;PYTHONDONTWRITEBYTECODE=1;PLASMA_MCP_BUILD_DIR=${PROJECT_BINARY_DIR};CMAKE_COMMAND=${CMAKE_COMMAND};PLASMA_MCP_TEST_PLUGIN=$<TARGET_FILE:plasma_mcp_test_plugin>")
 endforeach()

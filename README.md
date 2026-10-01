@@ -244,11 +244,37 @@ signal, and the bridge does not receive D-Bus signals.
 
 ## Protocol
 
-- Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout.
+- Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout, one JSON object
+  per line. Batches are rejected (`-32600`); the `jsonrpc` member is tolerated
+  when absent.
+- Protocol versions: `2024-11-05`, `2025-06-18` and `2025-11-25`. The server
+  answers the version the client asks for when it supports it, otherwise the
+  highest supported version older than the request (`2025-03-26`, which
+  requires batches, gets `2024-11-05`), otherwise `2025-11-25`.
 - Implemented: `initialize`, `notifications/initialized`, `ping`, `tools/list`,
-  `tools/call`.
-- Failed D-Bus calls return an MCP tool error (`isError: true`), not a transport
-  error — so an agent can read the message and retry.
+  `tools/call`, `notifications/cancelled`.
+- Tool calls run concurrently — four built-in calls at a time, plugin tools one
+  at a time beside them — so replies may arrive out of order; they carry the
+  request id. `ping` and `tools/list` are answered at once, even during a slow
+  call. A request whose id is still in flight is ignored.
+- `notifications/cancelled`: a call still waiting is skipped; a running call
+  goes to its end (a D-Bus call cannot be interrupted) and its result is
+  dropped. No reply is sent for a cancelled request.
+- Each D-Bus round-trip of `dbus_call` (introspection, then the call) waits at
+  most `--call-timeout-ms` (25000 by default) or the call's `timeout_ms`; on
+  expiry the tool error names `org.freedesktop.DBus.Error.NoReply`. A service
+  that does not answer the introspection in time fails the call at once, so a
+  hung service costs one timeout, not one per round-trip. `dbus_list_services`
+  and `dbus_introspect` keep QtDBus's 25 s.
+- Errors: invalid JSON → `-32700`; a frame that is not one request object, a
+  null or non-scalar `id`, a missing `method` → `-32600`; unknown method →
+  `-32601`; `tools/call` without `name`, with non-object `arguments`, or for an
+  unknown tool → `-32602`. A failed D-Bus call returns an MCP tool error
+  (`isError: true`), not a transport error — so an agent can read the message
+  and retry.
+- Shutdown: when stdin closes (or stdout breaks), results arriving within 2 s
+  are still written; the bridge then exits with code 0, even if a call is still
+  running.
 
 ## Extending: backends and plugins
 
@@ -259,6 +285,10 @@ independent shared libraries instead of forks.
 A plugin implements `PluginInterface` (in `<core/plugin.h>`)
 and returns one or more `Backend` objects; each backend adds its `Tool`s to the
 registry at startup. The ABI is `org.kde.plasma.mcpbridge.PluginInterface/1.0`.
+A plugin's tools are called on a dedicated worker thread — always the same
+one, never the main thread — one at a time (they need not be reentrant). A tool whose name is already
+registered is refused with a warning.
+
 Consume it from CMake with:
 
 ```cmake

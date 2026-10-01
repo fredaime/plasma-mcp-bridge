@@ -13,7 +13,12 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QSet>
 #include <QTextStream>
+
+#include <csignal>
 
 #include <memory>
 #include <vector>
@@ -24,12 +29,21 @@
 
 namespace {
 
-std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy)
+std::vector<std::unique_ptr<Backend>> builtinBackends(const CallPolicy *policy, int callTimeoutMs)
 {
     std::vector<std::unique_ptr<Backend>> backends;
-    backends.push_back(std::make_unique<DBusBackend>(policy));
+    backends.push_back(std::make_unique<DBusBackend>(policy, callTimeoutMs));
     backends.push_back(std::make_unique<NotificationBackend>());
     return backends;
+}
+
+QSet<QString> toolNames(const ToolRegistry &registry)
+{
+    QSet<QString> names;
+    const QJsonArray tools = registry.toJson();
+    for (const QJsonValue &tool : tools)
+        names.insert(tool.toObject().value(QStringLiteral("name")).toString());
+    return names;
 }
 
 void registerAll(const std::vector<std::unique_ptr<Backend>> &backends,
@@ -47,6 +61,9 @@ void registerAll(const std::vector<std::unique_ptr<Backend>> &backends,
 
 int main(int argc, char *argv[])
 {
+    // A client that closes its end must not kill the bridge mid-write (m11):
+    // the write fails and the transport shuts down instead.
+    std::signal(SIGPIPE, SIG_IGN);
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("plasma-mcp-bridge"));
     QCoreApplication::setApplicationVersion(QStringLiteral(PLASMA_MCP_BRIDGE_VERSION));
@@ -94,6 +111,12 @@ int main(int argc, char *argv[])
                        "The rules still apply to the connection behind them."));
     parser.addOption(allowUniqueNamesOption);
 
+    QCommandLineOption callTimeoutOption(QStringLiteral("call-timeout-ms"),
+        QStringLiteral("Milliseconds dbus_call waits for each D-Bus round-trip (default 25000). "
+                       "A call's timeout_ms argument overrides it."),
+        QStringLiteral("ms"), QStringLiteral("25000"));
+    parser.addOption(callTimeoutOption);
+
     parser.process(app);
 
     CallPolicy::Options policyOptions;
@@ -114,17 +137,30 @@ int main(int argc, char *argv[])
 
     ToolRegistry registry;
 
-    auto allBackends = builtinBackends(&policy);
+    bool callTimeoutValid = false;
+    const int callTimeoutMs = parser.value(callTimeoutOption).toInt(&callTimeoutValid);
+    if (!callTimeoutValid || callTimeoutMs < 1) {
+        qCritical("plasma-mcp-bridge: invalid --call-timeout-ms value '%s': expected a positive "
+                  "integer",
+                  qUtf8Printable(parser.value(callTimeoutOption)));
+        return 2;
+    }
+
+    const auto builtins = builtinBackends(&policy, callTimeoutMs);
+    std::vector<std::unique_ptr<Backend>> pluginBackends;
     PluginLoader loader;
     for (const QString &pluginPath : parser.values(pluginOption)) {
-        if (!loader.load(pluginPath, &allBackends)) {
+        if (!loader.load(pluginPath, &pluginBackends)) {
             qCritical("plasma-mcp-bridge: aborting: plugin %s could not be loaded",
                       qUtf8Printable(pluginPath));
             return 2;
         }
     }
 
-    registerAll(allBackends, &registry, context);
+    registerAll(builtins, &registry, context);
+    const QSet<QString> builtinTools = toolNames(registry);
+    registerAll(pluginBackends, &registry, context);
+    const QSet<QString> pluginTools = toolNames(registry) - builtinTools;
 
     if (parser.isSet(emitSkillOption)) {
         QTextStream out(stdout);
@@ -139,7 +175,9 @@ int main(int argc, char *argv[])
 
     StdioTransport transport;
     Server server(&transport, &registry);
-    QObject::connect(&transport, &StdioTransport::closed, &app, &QCoreApplication::quit);
+    server.setSerializedTools(pluginTools);
+    QObject::connect(&transport, &StdioTransport::closed, &server, &Server::shutdown);
+    QObject::connect(&server, &Server::finished, &app, &QCoreApplication::quit);
     transport.start();
 
     qInfo("plasma-mcp-bridge %s ready on stdio with %d tools", PLASMA_MCP_BRIDGE_VERSION,
