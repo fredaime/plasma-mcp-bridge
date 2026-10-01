@@ -87,6 +87,10 @@ class Echo(_OtherInterface):
     def EchoB(self): pass
     @_echo('ox')
     def EchoOX(self): pass
+    @_echo('t')
+    def EchoT(self): pass
+    @_echo('s')
+    def EchoS(self): pass
 
     @dbus.service.method(IFACE, in_signature='u', out_signature='s', message_keyword='msg')
     def EchoIface(self, a, msg=None):

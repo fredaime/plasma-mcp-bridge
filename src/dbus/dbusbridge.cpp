@@ -2,6 +2,7 @@
 #include "dbus/dbusbridge.h"
 
 #include "dbus/interfaceresolver.h"
+#include "dbus/typecoercer.h"
 
 #include <QDBusArgument>
 #include <QDBusConnection>
@@ -83,10 +84,25 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
 
     const MethodResolution resolution = resolveMethod(bus, service, path, interface, method);
 
+    // Typed conversion when the introspection data names exactly one method
+    // with this argument count; otherwise the loose mapping (the remote then
+    // rejects a mismatch itself).
+    const bool typed = resolution.state == MethodResolution::Unique
+        && resolution.inSignature.size() == args.size();
     QVariantList variantArgs;
     variantArgs.reserve(args.size());
-    for (const QJsonValue &arg : args)
-        variantArgs.append(jsonToVariant(arg));
+    for (int i = 0; i < args.size(); ++i) {
+        if (!typed) {
+            variantArgs.append(jsonToVariant(args.at(i)));
+            continue;
+        }
+        QVariant value;
+        QString error;
+        if (!TypeCoercer::coerce(args.at(i), resolution.inSignature.at(i), &value, &error))
+            return DBusResult::failure(QStringLiteral("argument %1 (%2): %3")
+                                           .arg(i).arg(resolution.inSignature.at(i), error));
+        variantArgs.append(value);
+    }
 
     // A plain method call with an explicit interface. QDBusInterface is not
     // used: its isValid() relies on name-owner tracking, which the bus daemon
