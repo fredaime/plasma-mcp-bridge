@@ -7,7 +7,9 @@
 #include <QJsonParseError>
 #include <QSocketNotifier>
 
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <unistd.h>
 
 StdioTransport::StdioTransport(QObject *parent)
@@ -62,7 +64,17 @@ void StdioTransport::onReadable()
 
 void StdioTransport::send(const QJsonObject &message)
 {
+    if (m_broken)
+        return;
     const QByteArray data = QJsonDocument(message).toJson(QJsonDocument::Compact) + '\n';
-    ::fwrite(data.constData(), 1, static_cast<size_t>(data.size()), stdout);
-    ::fflush(stdout);
+    if (std::fwrite(data.constData(), 1, static_cast<size_t>(data.size()), stdout)
+            != static_cast<size_t>(data.size())
+        || std::fflush(stdout) != 0) {
+        m_broken = true;
+        qInfo("plasma-mcp-bridge: cannot write to stdout (%s); shutting down",
+              std::strerror(errno));
+        if (m_notifier)
+            m_notifier->setEnabled(false);
+        Q_EMIT closed();
+    }
 }

@@ -9,10 +9,19 @@
 #include "mcp/toolrunner.h"
 
 #include <QJsonArray>
+#include <QTimer>
+
+#include <cstdio>
+#include <cstdlib>
 
 #ifndef PLASMA_MCP_BRIDGE_VERSION
 #define PLASMA_MCP_BRIDGE_VERSION "0.0.0"
 #endif
+
+namespace {
+// How long results are still written after the client went away.
+constexpr int kDrainMs = 2000;
+} // namespace
 
 Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *parent)
     : QObject(parent)
@@ -23,11 +32,35 @@ Server::Server(StdioTransport *transport, ToolRegistry *registry, QObject *paren
     connect(m_transport, &StdioTransport::messageReceived, this, &Server::onMessage);
     connect(m_transport, &StdioTransport::invalidFrame, this, &Server::onInvalidFrame);
     connect(m_runner, &ToolRunner::resultReady, this, &Server::sendToolResult);
+    connect(m_runner, &ToolRunner::idle, this, [this] {
+        if (m_closing)
+            Q_EMIT finished();
+    });
 }
 
 void Server::setSerializedTools(const QSet<QString> &names)
 {
     m_serializedTools = names;
+}
+
+void Server::shutdown()
+{
+    if (m_closing)
+        return;
+    m_closing = true;
+    if (m_runner->inFlight() == 0) {
+        Q_EMIT finished();
+        return;
+    }
+    QTimer::singleShot(kDrainMs, this, [] {
+        // A call is still running. Do not destroy the thread pools (their
+        // destructor waits for the D-Bus call, up to its timeout) nor return
+        // from main() (the registry would be destroyed under the worker).
+        qInfo("plasma-mcp-bridge: exiting with a tool call still running");
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(0);
+    });
 }
 
 void Server::onInvalidFrame(int code)
@@ -136,6 +169,11 @@ void Server::handleToolsList(const QJsonValue &id)
 
 void Server::handleToolsCall(const QJsonValue &id, const QJsonValue &params)
 {
+    if (m_closing) {
+        qInfo("plasma-mcp-bridge: ignoring request %s: shutting down",
+              qUtf8Printable(mcp::jsonrpc::idText(id)));
+        return;
+    }
     const QJsonValue name = params.toObject().value(QStringLiteral("name"));
     const QJsonValue arguments = params.toObject().value(QStringLiteral("arguments"));
     if (!params.isObject() || !name.isString()

@@ -56,4 +56,6 @@ void ToolRunner::finish(const QJsonValue &id, const QString &text, bool isError)
     const std::shared_ptr<std::atomic_bool> cancelled = m_inFlight.take(mcp::jsonrpc::idText(id));
     if (cancelled && !cancelled->load())
         Q_EMIT resultReady(id, text, isError);
+    if (m_inFlight.isEmpty())
+        Q_EMIT idle();
 }

@@ -25,6 +25,15 @@ public:
     // be reentrant), beside the built-in tools.
     void setSerializedTools(const QSet<QString> &names);
 
+    // The client is gone (stdin closed or stdout broken): no more tools/call
+    // is accepted; results that arrive within two seconds are still written.
+    // Emits finished() once nothing is in flight. If a call is still running
+    // after two seconds, flushes and exits the process (see server.cpp).
+    void shutdown();
+
+Q_SIGNALS:
+    void finished();
+
 private:
     void onMessage(const QJsonObject &message);
     void onInvalidFrame(int code);
@@ -38,4 +47,5 @@ private:
     ToolRegistry *m_registry;
     ToolRunner *m_runner;
     QSet<QString> m_serializedTools;
+    bool m_closing = false;
 };

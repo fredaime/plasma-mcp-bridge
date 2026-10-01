@@ -227,5 +227,36 @@ class TimeoutValues(FixtureTestCase):
                 self.assertIn(b'invalid --call-timeout-ms value', result.stderr)
 
 
+class ShutdownWhileBlocked(FixtureTestCase):
+    """SlowBlocking blocks the fixture: one test per class."""
+
+    def test_eof_during_a_blocking_call_exits_promptly(self):
+        session = self.bridge()
+        session.start('tools/call', tool_call(dict(ECHO, method='SlowBlocking', args=[10])))
+        time.sleep(0.3)
+        started = time.monotonic()
+        session.proc.stdin.close()
+        self.assertEqual(session.proc.wait(timeout=5), 0)
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertIn('exiting with a tool call still running', session.stderr_text())
+
+
+class Shutdown(FixtureTestCase):
+
+    def test_result_arriving_during_drain_is_written(self):
+        session = self.bridge()
+        rid = session.start('tools/call', tool_call(dict(ECHO, method='Slow', args=[1])))
+        session.proc.stdin.close()
+        self.assertEqual(session.read_message(timeout=2.5)['id'], rid)
+        self.assertEqual(session.proc.wait(timeout=2), 0)
+
+    def test_closed_stdout_does_not_kill_with_sigpipe(self):
+        session = self.bridge()
+        session.start('tools/call', tool_call(dict(ECHO, method='Slow', args=[1])))
+        session.proc.stdout.close()
+        self.assertEqual(session.proc.wait(timeout=5), 0)
+        self.assertIn('cannot write to stdout', session.stderr_text())
+
+
 if __name__ == '__main__':
     unittest.main()

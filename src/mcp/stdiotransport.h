@@ -17,6 +17,7 @@ public:
     explicit StdioTransport(QObject *parent = nullptr);
 
     void start();
+    // On a write error (client gone), stops writing and emits closed().
     void send(const QJsonObject &message);
 
 Q_SIGNALS:
@@ -31,4 +32,5 @@ private:
 
     QSocketNotifier *m_notifier = nullptr;
     QByteArray m_buffer;
+    bool m_broken = false;
 };

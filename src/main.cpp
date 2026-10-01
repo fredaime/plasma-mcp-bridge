@@ -18,6 +18,8 @@
 #include <QSet>
 #include <QTextStream>
 
+#include <csignal>
+
 #include <memory>
 #include <vector>
 
@@ -59,6 +61,9 @@ void registerAll(const std::vector<std::unique_ptr<Backend>> &backends,
 
 int main(int argc, char *argv[])
 {
+    // A client that closes its end must not kill the bridge mid-write (m11):
+    // the write fails and the transport shuts down instead.
+    std::signal(SIGPIPE, SIG_IGN);
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("plasma-mcp-bridge"));
     QCoreApplication::setApplicationVersion(QStringLiteral(PLASMA_MCP_BRIDGE_VERSION));
@@ -171,7 +176,8 @@ int main(int argc, char *argv[])
     StdioTransport transport;
     Server server(&transport, &registry);
     server.setSerializedTools(pluginTools);
-    QObject::connect(&transport, &StdioTransport::closed, &app, &QCoreApplication::quit);
+    QObject::connect(&transport, &StdioTransport::closed, &server, &Server::shutdown);
+    QObject::connect(&server, &Server::finished, &app, &QCoreApplication::quit);
     transport.start();
 
     qInfo("plasma-mcp-bridge %s ready on stdio with %d tools", PLASMA_MCP_BRIDGE_VERSION,

@@ -31,10 +31,13 @@ public:
     // id is not in flight (unknown or finished).
     bool cancel(const QJsonValue &id);
     bool isInFlight(const QJsonValue &id) const;
+    int inFlight() const { return static_cast<int>(m_inFlight.size()); }
 
 Q_SIGNALS:
     // Not emitted for a cancelled call.
     void resultReady(const QJsonValue &id, const QString &text, bool isError);
+    // The last call in flight has finished.
+    void idle();
 
 private:
     void finish(const QJsonValue &id, const QString &text, bool isError);
