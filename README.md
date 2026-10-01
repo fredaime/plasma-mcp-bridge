@@ -271,12 +271,23 @@ signal, and the bridge does not receive D-Bus signals.
 - Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout, one JSON object
   per line. Batches are rejected (`-32600`); the `jsonrpc` member is tolerated
   when absent.
-- Protocol versions: `2024-11-05`, `2025-06-18` and `2025-11-25`. The server
-  answers the version the client asks for when it supports it, otherwise the
-  highest supported version older than the request (`2025-03-26`, which
-  requires batches, gets `2024-11-05`), otherwise `2025-11-25`.
-- Implemented: `initialize`, `notifications/initialized`, `ping`, `tools/list`,
-  `tools/call`, `notifications/cancelled`.
+- Protocol versions, two eras in one process:
+  - **2026-07-28** (stateless): every request carries
+    `_meta["io.modelcontextprotocol/protocolVersion"]` and
+    `_meta["io.modelcontextprotocol/clientCapabilities"]`. Served:
+    `server/discover`, `tools/list`, `tools/call`, `subscriptions/listen` (the
+    bridge has no notification to offer: the stream is acknowledged empty and
+    stays open until cancelled). Results carry `resultType` and the server's
+    identity in `_meta`; another modern version gets `-32022`, a missing field
+    `-32602`, `ping` and `logging/setLevel` `-32601`.
+  - **2024-11-05, 2025-06-18, 2025-11-25** through `initialize`: the server
+    answers the version the client asks for when it supports it, otherwise the
+    highest supported version older than the request (`2025-03-26`, which
+    requires batches, gets `2024-11-05`), otherwise `2025-11-25` — also for a
+    client asking for `2026-07-28` in `initialize`, which has no handshake.
+    Implemented: `initialize`, `notifications/initialized`, `ping`,
+    `tools/list`, `tools/call`.
+- `notifications/cancelled` works in both eras.
 - Tool calls run concurrently — four built-in calls at a time, plugin tools one
   at a time beside them — so replies may arrive out of order; they carry the
   request id. `ping` and `tools/list` are answered at once, even during a slow

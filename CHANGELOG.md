@@ -1,8 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
-
-Pre-releases are versioned 0.1.90+.
+## 0.2.0 (2026-10-02)
 
 ### Fixed
 - A reply containing a string or byte array nested in an array or struct
@@ -72,8 +70,12 @@ Pre-releases are versioned 0.1.90+.
   per `dbus_call` on stderr.
 - `notifications/cancelled`; `--call-timeout-ms` and a per-call `timeout_ms`
   argument to `dbus_call`; `DBusBridge::callMethod(…, int timeoutMs)`.
-
 - `{"@dbus": "<type>", "value": …}` forces the type of a variant argument.
+- MCP 2026-07-28, dual-era: a request carrying
+  `_meta["io.modelcontextprotocol/protocolVersion"]` is served statelessly
+  (`server/discover`, `tools/list`, `tools/call`, minimal `subscriptions/listen`;
+  `-32022` for an unsupported version) beside the `initialize` lifecycle of
+  2024-11-05, 2025-06-18 and 2025-11-25.
 
 ### Removed
 - The D-Bus activation file `org.kde.plasma.mcpbridge.service`: activating the
