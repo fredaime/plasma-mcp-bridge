@@ -66,8 +66,16 @@ void Server::onMessage(const QJsonObject &message)
 
     const QString name = method.toString();
     const QJsonValue params = message.value(QStringLiteral("params"));
-    if (!hasId)
-        return; // notifications/initialized and every other notification: nothing to do.
+    if (!hasId) {
+        handleNotification(name, params.toObject());
+        return;
+    }
+    if (m_runner->isInFlight(id)) {
+        // Exactly one response per id: the call already running keeps it.
+        qInfo("plasma-mcp-bridge: ignoring request %s: a request with this id is still in flight",
+              qUtf8Printable(mcp::jsonrpc::idText(id)));
+        return;
+    }
 
     if (name == QLatin1String("initialize")) {
         handleInitialize(id, params.toObject());
@@ -81,6 +89,20 @@ void Server::onMessage(const QJsonObject &message)
         m_transport->send(mcp::jsonrpc::makeError(
             id, mcp::jsonrpc::MethodNotFound, QStringLiteral("Method not found: %1").arg(name)));
     }
+}
+
+void Server::handleNotification(const QString &method, const QJsonObject &params)
+{
+    // notifications/initialized and every other notification: nothing to do.
+    if (method != QLatin1String("notifications/cancelled"))
+        return;
+    const QJsonValue requestId = params.value(QStringLiteral("requestId"));
+    if (m_runner->cancel(requestId))
+        qInfo("plasma-mcp-bridge: cancelled request %s",
+              qUtf8Printable(mcp::jsonrpc::idText(requestId)));
+    else
+        qInfo("plasma-mcp-bridge: ignoring cancellation of request %s (unknown or finished)",
+              qUtf8Printable(mcp::jsonrpc::idText(requestId)));
 }
 
 void Server::handleInitialize(const QJsonValue &id, const QJsonObject &params)

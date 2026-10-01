@@ -17,21 +17,43 @@ ToolRunner::ToolRunner(QObject *parent)
     m_serialPool->setMaxThreadCount(1);
 }
 
-void ToolRunner::submit(const QJsonValue &id, Tool *tool, const QJsonObject &arguments,
+bool ToolRunner::submit(const QJsonValue &id, Tool *tool, const QJsonObject &arguments,
                         bool serialized)
 {
-    m_inFlight.insert(mcp::jsonrpc::idText(id));
+    const QString key = mcp::jsonrpc::idText(id);
+    if (m_inFlight.contains(key))
+        return false;
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
+    m_inFlight.insert(key, cancelled);
     QThreadPool *pool = serialized ? m_serialPool : m_pool;
-    pool->start(QRunnable::create([this, id, tool, arguments] {
-        const ToolResult result = tool->call(arguments);
+    pool->start(QRunnable::create([this, id, tool, arguments, cancelled] {
+        ToolResult result;
+        if (!cancelled->load()) // cancelled while waiting in the queue: never starts
+            result = tool->call(arguments);
         QMetaObject::invokeMethod(
             this, [this, id, result] { finish(id, result.text, result.isError); },
             Qt::QueuedConnection);
     }));
+    return true;
+}
+
+bool ToolRunner::cancel(const QJsonValue &id)
+{
+    const auto it = m_inFlight.constFind(mcp::jsonrpc::idText(id));
+    if (it == m_inFlight.constEnd())
+        return false;
+    it.value()->store(true);
+    return true;
+}
+
+bool ToolRunner::isInFlight(const QJsonValue &id) const
+{
+    return m_inFlight.contains(mcp::jsonrpc::idText(id));
 }
 
 void ToolRunner::finish(const QJsonValue &id, const QString &text, bool isError)
 {
-    m_inFlight.remove(mcp::jsonrpc::idText(id));
-    Q_EMIT resultReady(id, text, isError);
+    const std::shared_ptr<std::atomic_bool> cancelled = m_inFlight.take(mcp::jsonrpc::idText(id));
+    if (cancelled && !cancelled->load())
+        Q_EMIT resultReady(id, text, isError);
 }

@@ -28,6 +28,7 @@ public:
 private:
     void onMessage(const QJsonObject &message);
     void onInvalidFrame(int code);
+    void handleNotification(const QString &method, const QJsonObject &params);
     void handleInitialize(const QJsonValue &id, const QJsonObject &params);
     void handleToolsList(const QJsonValue &id);
     void handleToolsCall(const QJsonValue &id, const QJsonValue &params);
