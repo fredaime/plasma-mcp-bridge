@@ -20,6 +20,8 @@ struct MethodResolution {
     QString interface;
     // Unique only: one complete D-Bus type per input argument.
     QStringList inSignature;
+    // The introspection XML, when the introspection succeeded.
+    QString introspection;
     // Set when the introspection itself failed with a D-Bus error.
     QString errorName;
     QString errorMessage;
@@ -37,6 +39,12 @@ struct MethodResolution {
 // Pure parser, used by resolveMethod. `interface` may be empty.
 MethodResolution resolveMethodFromXml(const QString &xml, const QString &interface,
                                       const QString &method);
+
+// The D-Bus type of `property` on `interface`, from the object's own
+// introspection data (child node descriptions ignored); empty when the
+// property is not declared.
+QString propertyTypeFromXml(const QString &xml, const QString &interface,
+                            const QString &property);
 
 // Introspects service/path (one round-trip of at most timeoutMs, no cache)
 // and resolves `method`.

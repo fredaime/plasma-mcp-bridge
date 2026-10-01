@@ -175,7 +175,7 @@ enregistré. Table codée en dur, sans interroger `QDBusMetaType::typeToSignatur
 | natif | `y b n q i u x t d s o g v` | types de base, `QDBusObjectPath`, `QDBusSignature`, `QDBusVariant` |
 | natif | `as`, `ay`, `av`, `a{sv}`, `ao`, `ag`, `ab an aq ai au ax at ad` | `QStringList`, `QByteArray`, `QVariantList`, `QVariantMap`, `QList<QDBusObjectPath>`, `QList<QDBusSignature>`, `QList<T>` |
 | curé | `a{ss}`, `aas`, `aay`, `aa{sv}`, `a{sa{sv}}`, `aai` | `QMap<QString,QString>`, `QList<QStringList>`, `QList<QByteArray>`, `QList<QVariantMap>`, `QMap<QString,QVariantMap>`, `QList<QList<int>>` |
-| curé | `(si)`, `(ss)`, `(sss)`, `(ii)`, `(ai)`, `(oa{sv})`, `(iss)` | `std::tuple<…>` (`operator<<` public de `qdbusargument.h`) |
+| curé | `(si)`, `(ss)`, `(sss)`, `(ii)`, `(ai)`, `(oa{sv})`, `(iss)` | `DBusStruct<T…>` interne (Qt 6.4.2 n'a pas le support `std::tuple` de `qdbusargument.h` — amendement PR3b) |
 
 Les métatypes curés sont enregistrés **explicitement**, une fois, par `qDBusRegisterMetaType<T>()`
 (idempotent, thread-safe), y compris ceux que Qt 6.11 enregistre déjà mais pas Qt 6.4.2
@@ -199,7 +199,7 @@ dans la déclaration `<property name=… type=…>` de l'interface cible (même 
 `0.5` pour `Volume` part donc en `ssv` contenant un `d`.
 
 **`h` (m2).** En sortie, marqueur `"<unix fd: not transferable over MCP>"`. En entrée, erreur
-explicite.
+explicite. En entrée, aussi comme clé de map.
 
 **Tests** (`test_coercion`, partie A2) : la matrice prototypée (48 cas, identique en 6.4.2 et 6.11) :
 `au`, `a{ss}`, `(si)`, `ay`, `o`, `o` invalide, `g`, `v` (naturel, `@dbus`, objet), `(o,x)`, `as`,
@@ -417,7 +417,7 @@ repli `initialize` d'un client historique ; liste issue de F0 couverte cas par c
 
 ## 9. Changements visibles (CHANGELOG cumulatif, note de migration 0.2.0)
 
-Nombres exacts (et `t` > 2^53 en chaîne) ; `null` pour une méthode void ; marqueurs
+Nombres exacts (`t` et `x` hors ±2^53 en chaîne — décision PR3b) ; `null` pour une méthode void ; marqueurs
 `<unsupported D-Bus type …>` et `<unix fd: not transferable over MCP>` ; erreurs de plage et
 `unsupported` en `isError` ; `ay` accepté en base64 strict ; entiers dans `v` en `i` s'ils tiennent
 (m12) ; bus système refusé par défaut ; denylist et options de policy ; destinations `:N.M` refusées ;

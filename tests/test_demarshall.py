@@ -99,6 +99,13 @@ class Demarshall(FixtureTestCase):
         self.assertEqual(self.scalar('RetT'), ('18446744073709551615', False))
         self.assertEqual(self.ret('RetASVBigT'), {'big': '18446744073709551615', 'small': 5})
 
+    def test_int64_beyond_2_53_is_a_decimal_string(self):
+        self.assertEqual(self.ret('RetAXBig'),
+                         [9007199254740992, '9007199254740993', '-9007199254740993'])
+
+    def test_unix_fd_is_a_marker(self):
+        self.assertEqual(self.scalar('RetH'), ('<unix fd: not transferable over MCP>', False))
+
 
 if __name__ == '__main__':
     unittest.main()

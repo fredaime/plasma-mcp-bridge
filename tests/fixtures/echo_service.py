@@ -9,6 +9,8 @@ Owns org.plasmamcp.Validation at /Echo on the private test bus.
 - Slow(d)       replies after d seconds WITHOUT blocking the service (several
                 Slow calls overlap); SlowBlocking(d) blocks the service.
 - org.freedesktop.DBus.Properties Set/Get/GetAll record the last Set.
+- /Loose answers EchoAny(any signature) but has no introspection data.
+- /Props: Properties.Set typed by <property> declarations; LastSet() tells what arrived.
 Prints "READY org.plasmamcp.Validation" once the name is owned.
 """
 import os
@@ -26,13 +28,16 @@ PROPS = 'org.freedesktop.DBus.Properties'
 
 
 def _echo(signature):
+    """Echo<X>: replies "<wire signature>|<repr of the received args>"."""
+    names = ['a%d' % i for i in range(len(list(dbus.Signature(signature))))]
+
     def decorator(fn):
-        if signature == 'ox':
-            def method(self, a, b, msg=None):
-                return '%s|%r' % (msg.get_signature(), [a, b])
-        else:
-            def method(self, a, msg=None):
-                return '%s|%r' % (msg.get_signature(), [a])
+        namespace = {}
+        # dbus-python needs one named parameter per argument of the signature.
+        exec('def method(self, %s, msg=None):\n'
+             '    return "%%s|%%r" %% (msg.get_signature(), [%s])\n'
+             % (', '.join(names), ', '.join(names)), namespace)
+        method = namespace['method']
         method.__name__ = fn.__name__
         return dbus.service.method(IFACE, in_signature=signature, out_signature='s',
                                    message_keyword='msg')(method)
@@ -91,6 +96,48 @@ class Echo(_OtherInterface):
     def EchoT(self): pass
     @_echo('s')
     def EchoS(self): pass
+    @_echo('i')
+    def EchoI(self): pass
+    @_echo('ai')
+    def EchoAI(self): pass
+    @_echo('ax')
+    def EchoAX(self): pass
+    @_echo('at')
+    def EchoAT(self): pass
+    @_echo('ad')
+    def EchoAD(self): pass
+    @_echo('ab')
+    def EchoAB(self): pass
+    @_echo('g')
+    def EchoG(self): pass
+    @_echo('h')
+    def EchoH(self): pass
+    @_echo('a(si)')
+    def EchoASI(self): pass
+    @_echo('a(ai)')
+    def EchoAStructAI(self): pass
+    @_echo('aas')
+    def EchoAAS(self): pass
+    @_echo('aay')
+    def EchoAAY(self): pass
+    @_echo('aai')
+    def EchoAAI(self): pass
+    @_echo('aa{sv}')
+    def EchoAASV(self): pass
+    @_echo('a{sa{sv}}')
+    def EchoASASV(self): pass
+    @_echo('a{sa{ss}}')
+    def EchoASASS(self): pass
+    @_echo('asaiu')
+    def EchoASAIU(self): pass
+    @_echo('(a(si)v)')
+    def EchoNested(self): pass
+    @_echo('a{iu}')
+    def EchoMapIU(self): pass
+    @_echo('a(sssuda{sv})')
+    def EchoUnsupported(self): pass
+    @_echo('a{s(sssuda{sv})}')
+    def EchoMapUnsupported(self): pass
 
     @dbus.service.method(IFACE, in_signature='u', out_signature='s', message_keyword='msg')
     def EchoIface(self, a, msg=None):
@@ -103,6 +150,8 @@ class Echo(_OtherInterface):
     def RetU(self): return dbus.UInt32(123456789)
     @dbus.service.method(IFACE, in_signature='', out_signature='x')
     def RetX(self): return dbus.Int64(4000000)
+    @dbus.service.method(IFACE, in_signature='', out_signature='ax')
+    def RetAXBig(self): return [2 ** 53, 2 ** 53 + 1, -(2 ** 53 + 1)]
     @dbus.service.method(IFACE, in_signature='', out_signature='d')
     def RetD(self): return dbus.Double(3.14159265)
     @dbus.service.method(IFACE, in_signature='', out_signature='t')
@@ -225,6 +274,74 @@ class Nested(dbus.service.Object):
         return '%s|%s|%r' % (msg.get_interface(), msg.get_signature(), [a])
 
 
+_BASIC_CODES = {dbus.Byte: 'y', dbus.Boolean: 'b', dbus.Int16: 'n', dbus.UInt16: 'q',
+                dbus.Int32: 'i', dbus.UInt32: 'u', dbus.Int64: 'x', dbus.UInt64: 't',
+                dbus.Double: 'd', dbus.String: 's', dbus.ObjectPath: 'o',
+                dbus.Signature: 'g'}
+
+
+def _wire_type(value):
+    if isinstance(value, dbus.Dictionary):
+        return 'a{%s}' % value.signature
+    if isinstance(value, dbus.Array):
+        return 'a%s' % value.signature
+    return _BASIC_CODES[type(value)]
+
+
+class Loose(dbus.service.Object):
+    """No introspection data: the bridge cannot type the arguments, so they
+    take the natural mapping. EchoAny accepts any signature."""
+
+    @dbus.service.method('org.freedesktop.DBus.Introspectable', in_signature='',
+                         out_signature='s')
+    def Introspect(self):
+        return '<node/>'
+
+    # dbus-python cannot pass the message to a *args method: the signature is
+    # rebuilt from the types the arguments arrived with.
+    @dbus.service.method(IFACE, out_signature='s')
+    def EchoAny(self, *args):
+        return '%s|%r' % (''.join(_wire_type(a) for a in args), list(args))
+
+
+PROPS_XML = '''<node>
+  <interface name="org.freedesktop.DBus.Properties">
+    <method name="Set">
+      <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="in"/>
+    </method>
+  </interface>
+  <interface name="org.plasmamcp.Props">
+    <method name="LastSet"><arg type="s" direction="out"/></method>
+    <property name="Volume" type="d" access="readwrite"/>
+    <property name="Level" type="y" access="readwrite"/>
+  </interface>
+  <node name="child">
+    <interface name="org.plasmamcp.Props">
+      <property name="Level" type="s" access="readwrite"/>
+    </interface>
+  </node>
+</node>'''
+
+
+class Props(dbus.service.Object):
+    """Properties.Set whose property types exist only in the introspection
+    data (dbus-python does not declare properties itself)."""
+    last_set = 'never'
+
+    @dbus.service.method('org.freedesktop.DBus.Introspectable', in_signature='',
+                         out_signature='s')
+    def Introspect(self):
+        return PROPS_XML
+
+    @dbus.service.method(PROPS, in_signature='ssv', out_signature='', message_keyword='msg')
+    def Set(self, iface, prop, value, msg=None):
+        Props.last_set = '%s|%s.%s=%r' % (msg.get_signature(), iface, prop, value)
+
+    @dbus.service.method('org.plasmamcp.Props', in_signature='', out_signature='s')
+    def LastSet(self):
+        return Props.last_set
+
+
 def main():
     if os.environ.get('PLASMA_MCP_TEST_BUS') != os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
         sys.exit('echo_service: refusing to own names outside the private test bus '
@@ -234,6 +351,8 @@ def main():
     name = dbus.service.BusName(NAME, bus, do_not_queue=True)  # noqa: F841 (keeps the name)
     Echo(bus, '/Echo')
     Nested(bus, '/Nested')
+    Loose(bus, '/Loose')
+    Props(bus, '/Props')
     print('READY ' + NAME, flush=True)
     GLib.MainLoop().run()
 

@@ -18,12 +18,38 @@
 #include <QJsonObject>
 #include <QMetaType>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace {
 // What QtDBus waits by default (its -1).
 constexpr int kDefaultCallTimeoutMs = 25000;
+
+// D-Bus allows 64 nested containers in a message, variants included; the bus
+// drops the connection of a sender that goes deeper.
+constexpr int kMaxMessageDepth = 64;
+
+// Containers the natural mapping of `value` nests, starting from `depth`: an
+// array is an 'av' (array, then a variant per item), an object an 'a{sv}'
+// (array, dict entry, then a variant per value). Stops counting once the
+// limit is passed.
+int naturalDepth(const QJsonValue &value, int depth)
+{
+    if (depth > kMaxMessageDepth)
+        return depth;
+    int deepest = depth;
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            deepest = std::max(deepest, naturalDepth(item, depth + 2));
+    } else if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it)
+            deepest = std::max(deepest, naturalDepth(it.value(), depth + 3));
+    }
+    return deepest;
+}
 } // namespace
 
 DBusBridge::DBusBridge() = default;
@@ -104,16 +130,40 @@ DBusResult DBusBridge::callMethod(const QString &busName, const QString &service
     // rejects a mismatch itself).
     const bool typed = resolution.state == MethodResolution::Unique
         && resolution.inSignature.size() == args.size();
+    // Properties.Set(s, s, v): the variant takes the type the target interface
+    // declares for the property, unless the caller forced one with "@dbus".
+    QJsonArray callArgs = args;
+    if (typed && resolution.interface == QLatin1String("org.freedesktop.DBus.Properties")
+        && method == QLatin1String("Set")
+        && resolution.inSignature
+            == QStringList{QStringLiteral("s"), QStringLiteral("s"), QStringLiteral("v")}
+        && !(args.at(2).isObject()
+             && args.at(2).toObject().contains(QStringLiteral("@dbus")))) {
+        const QString type = propertyTypeFromXml(resolution.introspection,
+                                                 args.at(0).toString(), args.at(1).toString());
+        if (!type.isEmpty())
+            callArgs[2] = QJsonObject{{QStringLiteral("@dbus"), type},
+                                      {QStringLiteral("value"), args.at(2)}};
+    }
+    // libdbus aborts on a message signature beyond 255 characters.
+    if (typed && resolution.inSignature.join(QString()).size() > 255)
+        return DBusResult::failure(
+            QStringLiteral("the method's signature is longer than 255 characters"));
     QVariantList variantArgs;
     variantArgs.reserve(args.size());
     for (int i = 0; i < args.size(); ++i) {
         if (!typed) {
-            variantArgs.append(jsonToVariant(args.at(i)));
+            if (naturalDepth(callArgs.at(i), 0) > kMaxMessageDepth)
+                return DBusResult::failure(
+                    QStringLiteral("argument %1: nested deeper than %2 D-Bus containers")
+                        .arg(i)
+                        .arg(kMaxMessageDepth));
+            variantArgs.append(jsonToVariant(callArgs.at(i)));
             continue;
         }
         QVariant value;
         QString error;
-        if (!TypeCoercer::coerce(args.at(i), resolution.inSignature.at(i), &value, &error))
+        if (!TypeCoercer::coerce(callArgs.at(i), resolution.inSignature.at(i), &value, &error))
             return DBusResult::failure(QStringLiteral("argument %1 (%2): %3")
                                            .arg(i).arg(resolution.inSignature.at(i), error));
         variantArgs.append(value);
@@ -149,10 +199,16 @@ QVariant DBusBridge::jsonToVariant(const QJsonValue &value)
     case QJsonValue::Bool:
         return value.toBool();
     case QJsonValue::Double: {
-        const double d = value.toDouble();
-        if (std::floor(d) == d && std::abs(d) < 9.0e15)
-            return QVariant(static_cast<qlonglong>(d));
-        return d;
+        // The natural mapping (m12): an integer is an 'i' when it fits in 32
+        // bits, an 'x' otherwise; anything else is a 'd'. Qt keeps integers
+        // that fit in int64 exact; two defaults tell such a value apart.
+        const qint64 exactA = value.toInteger(0);
+        const qint64 exactB = value.toInteger(1);
+        if (exactA != exactB)
+            return value.toDouble();
+        if (exactA >= std::numeric_limits<int>::min() && exactA <= std::numeric_limits<int>::max())
+            return QVariant(static_cast<int>(exactA));
+        return QVariant(static_cast<qlonglong>(exactA));
     }
     case QJsonValue::String:
         return value.toString();
@@ -186,6 +242,9 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     if (value.canConvert<QDBusArgument>())
         return demarshall(value.value<QDBusArgument>());
 
+    if (value.metaType() == QMetaType::fromType<QDBusUnixFileDescriptor>())
+        return QStringLiteral("<unix fd: not transferable over MCP>");
+
     switch (value.typeId()) {
     case QMetaType::Bool:
         return value.toBool();
@@ -196,8 +255,16 @@ QJsonValue DBusBridge::variantToJson(const QVariant &value)
     case QMetaType::UShort:
     case QMetaType::UChar:
     case QMetaType::UInt:
-    case QMetaType::LongLong:
         return static_cast<qint64>(value.toLongLong());
+    case QMetaType::LongLong: {
+        // Beyond +-2^53 a JSON number no longer holds the value exactly
+        // (clients parse numbers as doubles): emit the exact decimal string.
+        const qlonglong x = value.toLongLong();
+        const qlonglong limit = Q_INT64_C(1) << 53;
+        if (x >= -limit && x <= limit)
+            return static_cast<qint64>(x);
+        return QString::number(x);
+    }
     case QMetaType::ULongLong: {
         // Beyond 2^53 a JSON number no longer holds the value exactly (clients
         // parse numbers as doubles): emit the exact decimal string instead.

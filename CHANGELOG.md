@@ -23,6 +23,12 @@ Pre-releases are versioned 0.1.90+.
 - Invalid frames get a JSON-RPC error (`-32700`, `-32600`) instead of being
   dropped with a misleading log line.
 
+- Container arguments (`au`, `a{ss}`, `(si)`, `a(si)`, `aas`, `a{sa{sv}}`, …)
+  and variants are sent with the declared type instead of `av`/`a{sv}`;
+  `Properties.Set` sends the property's declared type.
+- A unix fd in a reply reads `"<unix fd: not transferable over MCP>"` (was
+  `<unrepresentable:QDBusUnixFileDescriptor>`).
+
 ### Changed
 - A reply element whose D-Bus type cannot be represented is replaced by
   `"<unsupported D-Bus type '<signature>'>"`; the rest of the reply is still
@@ -56,12 +62,18 @@ Pre-releases are versioned 0.1.90+.
 - On stdin EOF the bridge writes the results that arrive within 2 s, then
   exits with code 0 even if a call is still running.
 
+- An integer in a variant, or in an argument whose type is unknown, is sent as
+  `i` when it fits in 32 bits (was always `x`).
+- An `int64` beyond ±2^53 is returned as a decimal string, like a `uint64`.
+
 ### Added
 - Test-suite on a private D-Bus (`ctest`), see README.
 - `--deny`, `--allow`, `--default-deny`, `--allow-unique-names`; one audit line
   per `dbus_call` on stderr.
 - `notifications/cancelled`; `--call-timeout-ms` and a per-call `timeout_ms`
   argument to `dbus_call`; `DBusBridge::callMethod(…, int timeoutMs)`.
+
+- `{"@dbus": "<type>", "value": …}` forces the type of a variant argument.
 
 ### Removed
 - The D-Bus activation file `org.kde.plasma.mcpbridge.service`: activating the

@@ -4,15 +4,25 @@
 #include "dbus/dbusbridge.h"
 
 #include <QByteArray>
+#include <QDBusArgument>
+#include <QDBusMetaType>
 #include <QDBusObjectPath>
 #include <QDBusSignature>
+#include <QDBusVariant>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QList>
+#include <QMap>
+#include <QMetaType>
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <tuple>
 
 namespace {
 
@@ -186,73 +196,566 @@ bool coerceByteArray(const QJsonValue &value, QVariant *out, QString *error)
     return true;
 }
 
+// ------------------------------------------------------------ signatures
+
+// D-Bus limits (specification): beyond them libdbus aborts the process, or
+// the bus drops the connection, instead of returning an error.
+constexpr int kMaxArrayDepth = 32;
+constexpr int kMaxStructDepth = 32; // dict entries included
+constexpr int kMaxSignatureLength = 255;
+constexpr int kMaxMessageDepth = 64; // containers of a message, variants included
+
+bool isBasicType(QChar type)
+{
+    return QStringLiteral("ybnqiuxtdsogh").contains(type);
+}
+
+struct TypeScan {
+    qsizetype end = -1; // -1: malformed, or beyond the D-Bus limits
+    int depth = 0;      // containers the type nests
+};
+
+// The complete type that starts at `pos`, inside `arrays` arrays and
+// `structs` structs or dict entries.
+TypeScan scanType(const QString &sig, qsizetype pos, int arrays, int structs)
+{
+    TypeScan scan;
+    if (pos >= sig.size())
+        return scan;
+    const QChar type = sig.at(pos);
+    if (isBasicType(type) || type == QLatin1Char('v')) {
+        scan.end = pos + 1;
+        return scan;
+    }
+    if (type == QLatin1Char('a')) {
+        if (arrays + 1 > kMaxArrayDepth)
+            return scan;
+        if (pos + 1 < sig.size() && sig.at(pos + 1) == QLatin1Char('{')) {
+            const qsizetype key = pos + 2;
+            if (structs + 1 > kMaxStructDepth || key >= sig.size() || !isBasicType(sig.at(key)))
+                return scan;
+            const TypeScan value = scanType(sig, key + 1, arrays + 1, structs + 1);
+            if (value.end < 0 || value.end >= sig.size() || sig.at(value.end) != QLatin1Char('}'))
+                return scan;
+            scan.end = value.end + 1;
+            scan.depth = value.depth + 2;
+            return scan;
+        }
+        const TypeScan element = scanType(sig, pos + 1, arrays + 1, structs);
+        if (element.end < 0)
+            return scan;
+        scan.end = element.end;
+        scan.depth = element.depth + 1;
+        return scan;
+    }
+    if (type == QLatin1Char('(')) {
+        if (structs + 1 > kMaxStructDepth)
+            return scan;
+        qsizetype p = pos + 1;
+        int fields = 0;
+        int deepest = 0;
+        while (p < sig.size() && sig.at(p) != QLatin1Char(')')) {
+            const TypeScan field = scanType(sig, p, arrays, structs + 1);
+            if (field.end < 0)
+                return scan;
+            p = field.end;
+            deepest = std::max(deepest, field.depth);
+            ++fields;
+        }
+        if (p >= sig.size() || fields == 0)
+            return scan;
+        scan.end = p + 1;
+        scan.depth = deepest + 1;
+        return scan;
+    }
+    return scan;
+}
+
+// The complete types of `sig`, in order; empty when `sig` is malformed or
+// beyond the D-Bus limits.
+QStringList splitTypes(const QString &sig)
+{
+    if (sig.size() > kMaxSignatureLength)
+        return {};
+    QStringList types;
+    qsizetype p = 0;
+    while (p < sig.size()) {
+        const qsizetype end = scanType(sig, p, 0, 0).end;
+        if (end < 0)
+            return {};
+        types.append(sig.mid(p, end - p));
+        p = end;
+    }
+    return types;
+}
+
+// Containers a complete type nests (its struct/array/dict-entry levels).
+int typeDepth(const QString &sig)
+{
+    return scanType(sig, 0, 0, 0).depth;
+}
+
+bool isSingleCompleteType(const QString &sig)
+{
+    return splitTypes(sig).size() == 1;
+}
+
+bool isDict(const QString &sig)
+{
+    return sig.startsWith(QLatin1String("a{"));
+}
+
+QChar dictKey(const QString &sig)
+{
+    return sig.at(2);
+}
+
+QString dictValue(const QString &sig)
+{
+    return sig.mid(3, sig.size() - 4);
+}
+
+QStringList structFields(const QString &sig)
+{
+    return splitTypes(sig.mid(1, sig.size() - 2));
+}
+
+// ------------------------------------------------------------ element types
+
+// A struct whose fields QtDBus marshals in order. Qt 6.4's QDBusArgument has
+// no std::tuple support, so the curated struct types are built on this.
+template <typename... T>
+struct DBusStruct {
+    std::tuple<T...> fields;
+};
+
+template <typename... T>
+QDBusArgument &operator<<(QDBusArgument &argument, const DBusStruct<T...> &value)
+{
+    argument.beginStructure();
+    std::apply([&argument](const auto &...field) { (argument << ... << field); }, value.fields);
+    argument.endStructure();
+    return argument;
+}
+
+template <typename... T>
+const QDBusArgument &operator>>(const QDBusArgument &argument, DBusStruct<T...> &value)
+{
+    argument.beginStructure();
+    std::apply([&argument](auto &...field) { (argument >> ... >> field); }, value.fields);
+    argument.endStructure();
+    return argument;
+}
+
+// The element types beginArray() and beginMap() accept: one registered
+// QMetaType per array element / map value signature. QtDBus knows the native
+// ones; the curated ones are registered here once (thread-safe static), also
+// those recent Qt versions register themselves but Qt 6.4 does not. Written
+// out on purpose: QDBusMetaType::typeToSignature is internal API. Extend case
+// by case, with a test.
+QMetaType elementMetaType(const QString &sig)
+{
+    static const QHash<QString, QMetaType> table = [] {
+        QHash<QString, QMetaType> types{
+            {QStringLiteral("y"), QMetaType::fromType<uchar>()},
+            {QStringLiteral("b"), QMetaType::fromType<bool>()},
+            {QStringLiteral("n"), QMetaType::fromType<short>()},
+            {QStringLiteral("q"), QMetaType::fromType<ushort>()},
+            {QStringLiteral("i"), QMetaType::fromType<int>()},
+            {QStringLiteral("u"), QMetaType::fromType<uint>()},
+            {QStringLiteral("x"), QMetaType::fromType<qlonglong>()},
+            {QStringLiteral("t"), QMetaType::fromType<qulonglong>()},
+            {QStringLiteral("d"), QMetaType::fromType<double>()},
+            {QStringLiteral("s"), QMetaType::fromType<QString>()},
+            {QStringLiteral("o"), QMetaType::fromType<QDBusObjectPath>()},
+            {QStringLiteral("g"), QMetaType::fromType<QDBusSignature>()},
+            {QStringLiteral("v"), QMetaType::fromType<QDBusVariant>()},
+            {QStringLiteral("as"), QMetaType::fromType<QStringList>()},
+            {QStringLiteral("ay"), QMetaType::fromType<QByteArray>()},
+            {QStringLiteral("av"), QMetaType::fromType<QVariantList>()},
+            {QStringLiteral("a{sv}"), QMetaType::fromType<QVariantMap>()},
+            {QStringLiteral("ao"), QMetaType::fromType<QList<QDBusObjectPath>>()},
+            {QStringLiteral("ag"), QMetaType::fromType<QList<QDBusSignature>>()},
+            {QStringLiteral("ab"), QMetaType::fromType<QList<bool>>()},
+            {QStringLiteral("an"), QMetaType::fromType<QList<short>>()},
+            {QStringLiteral("aq"), QMetaType::fromType<QList<ushort>>()},
+            {QStringLiteral("ai"), QMetaType::fromType<QList<int>>()},
+            {QStringLiteral("au"), QMetaType::fromType<QList<uint>>()},
+            {QStringLiteral("ax"), QMetaType::fromType<QList<qlonglong>>()},
+            {QStringLiteral("at"), QMetaType::fromType<QList<qulonglong>>()},
+            {QStringLiteral("ad"), QMetaType::fromType<QList<double>>()},
+        };
+        types.insert(QStringLiteral("a{ss}"), qDBusRegisterMetaType<QMap<QString, QString>>());
+        types.insert(QStringLiteral("aas"), qDBusRegisterMetaType<QList<QStringList>>());
+        types.insert(QStringLiteral("aay"), qDBusRegisterMetaType<QList<QByteArray>>());
+        types.insert(QStringLiteral("aa{sv}"), qDBusRegisterMetaType<QList<QVariantMap>>());
+        types.insert(QStringLiteral("a{sa{sv}}"),
+                     qDBusRegisterMetaType<QMap<QString, QVariantMap>>());
+        types.insert(QStringLiteral("aai"), qDBusRegisterMetaType<QList<QList<int>>>());
+        types.insert(QStringLiteral("(si)"), qDBusRegisterMetaType<DBusStruct<QString, int>>());
+        types.insert(QStringLiteral("(ss)"),
+                     qDBusRegisterMetaType<DBusStruct<QString, QString>>());
+        types.insert(QStringLiteral("(sss)"),
+                     qDBusRegisterMetaType<DBusStruct<QString, QString, QString>>());
+        types.insert(QStringLiteral("(ii)"), qDBusRegisterMetaType<DBusStruct<int, int>>());
+        types.insert(QStringLiteral("(ai)"), qDBusRegisterMetaType<DBusStruct<QList<int>>>());
+        types.insert(QStringLiteral("(oa{sv})"),
+                     qDBusRegisterMetaType<DBusStruct<QDBusObjectPath, QVariantMap>>());
+        types.insert(QStringLiteral("(iss)"),
+                     qDBusRegisterMetaType<DBusStruct<int, QString, QString>>());
+        return types;
+    }();
+    return table.value(sig);
+}
+
+// ------------------------------------------------------------ basic values
+
+// Basic types: the strict conversion of PR3a.
+bool coerceBasic(const QJsonValue &value, QChar type, QVariant *out, QString *error)
+{
+    IntegerRange unused{};
+    if (integerRange(type, &unused))
+        return coerceInteger(value, type, out, error);
+    switch (type.toLatin1()) {
+    case 'b':
+        if (!value.isBool()) {
+            *error = QStringLiteral("expected a boolean, got %1").arg(jsonText(value));
+            return false;
+        }
+        *out = value.toBool();
+        return true;
+    case 'd':
+        if (!value.isDouble()) {
+            *error = QStringLiteral("expected a number, got %1").arg(jsonText(value));
+            return false;
+        }
+        *out = value.toDouble();
+        return true;
+    case 's':
+    case 'o':
+    case 'g':
+        if (!value.isString()) {
+            *error = QStringLiteral("expected a string, got %1").arg(jsonText(value));
+            return false;
+        }
+        if (type == QLatin1Char('s')) {
+            *out = value.toString();
+        } else if (type == QLatin1Char('o')) {
+            if (!isObjectPath(value.toString())) {
+                *error = QStringLiteral("%1 is not a valid object path").arg(jsonText(value));
+                return false;
+            }
+            *out = QVariant::fromValue(QDBusObjectPath(value.toString()));
+        } else {
+            const QString signature = value.toString();
+            if (!signature.isEmpty() && splitTypes(signature).isEmpty()) {
+                *error = QStringLiteral("%1 is not a valid D-Bus signature").arg(jsonText(value));
+                return false;
+            }
+            *out = QVariant::fromValue(QDBusSignature(signature));
+        }
+        return true;
+    case 'h':
+        *error = QStringLiteral("unix fd arguments are not supported (they cannot travel over MCP)");
+        return false;
+    default:
+        *error = QStringLiteral("'%1' is not a basic D-Bus type").arg(type);
+        return false;
+    }
+}
+
+// A JSON object key as the JSON value a map key of `type` is read from:
+// numbers and booleans are written as text in JSON keys.
+QJsonValue keyValue(const QString &key, QChar type)
+{
+    switch (type.toLatin1()) {
+    case 'd': {
+        bool ok = false;
+        const double number = key.toDouble(&ok);
+        return ok ? QJsonValue(number) : QJsonValue(key);
+    }
+    case 'b':
+        if (key == QLatin1String("true"))
+            return true;
+        if (key == QLatin1String("false"))
+            return false;
+        return key;
+    default:
+        return key; // integers: parseInteger reads decimal strings
+    }
+}
+
+// ------------------------------------------------------------ pass 1: check
+
+QString prefixed(const QString &where, const QString &error)
+{
+    return where + QStringLiteral(": ") + error;
+}
+
+QString checkValue(const QJsonValue &value, const QString &sig, int depth);
+
+// What a variant may hold: {"@dbus": "<type>", "value": …} for an explicit
+// type, otherwise the natural mapping of the JSON value. `depth` counts the
+// containers open around the value, this variant included.
+QString checkVariant(const QJsonValue &value, int depth)
+{
+    if (depth > kMaxMessageDepth)
+        return QStringLiteral("nested deeper than %1 D-Bus containers").arg(kMaxMessageDepth);
+    const QJsonObject object = value.toObject();
+    if (value.isObject() && object.contains(QStringLiteral("@dbus"))) {
+        const QJsonValue inner = object.value(QStringLiteral("@dbus"));
+        if (!isSingleCompleteType(inner.toString()))
+            return QStringLiteral("%1 is not a single complete D-Bus type").arg(jsonText(inner));
+        if (depth + typeDepth(inner.toString()) > kMaxMessageDepth)
+            return QStringLiteral("nested deeper than %1 D-Bus containers").arg(kMaxMessageDepth);
+        return checkValue(object.value(QStringLiteral("value")), inner.toString(), depth);
+    }
+    switch (value.type()) {
+    case QJsonValue::Array: {
+        // 'av': an array, then a variant per item.
+        const QJsonArray array = value.toArray();
+        for (int i = 0; i < array.size(); ++i) {
+            const QString error = checkVariant(array.at(i), depth + 2);
+            if (!error.isEmpty())
+                return prefixed(QStringLiteral("[%1]").arg(i), error);
+        }
+        return QString();
+    }
+    case QJsonValue::Object:
+        // 'a{sv}': an array, a dict entry, then a variant per value.
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            const QString error = checkVariant(it.value(), depth + 3);
+            if (!error.isEmpty())
+                return prefixed(QStringLiteral("['%1']").arg(it.key()), error);
+        }
+        return QString();
+    case QJsonValue::Null:
+    case QJsonValue::Undefined:
+        return QStringLiteral("null cannot be sent in a D-Bus variant");
+    default:
+        return QString();
+    }
+}
+
+// Pass 1: checks `value` against the complete type `sig`; returns the error,
+// empty when the value can be written. Builds nothing. `depth` counts the
+// D-Bus containers open around the value (a map entry sits in two: the
+// array and the dict entry).
+QString checkValue(const QJsonValue &value, const QString &sig, int depth)
+{
+    if (depth > kMaxMessageDepth)
+        return QStringLiteral("nested deeper than %1 D-Bus containers").arg(kMaxMessageDepth);
+    const QChar type = sig.at(0);
+    if (sig.size() == 1 && isBasicType(type)) {
+        QVariant unused;
+        QString error;
+        return coerceBasic(value, type, &unused, &error) ? QString() : error;
+    }
+    if (sig == QLatin1String("v"))
+        return checkVariant(value, depth + 1);
+    if (sig == QLatin1String("ay")) {
+        QVariant unused;
+        QString error;
+        return coerceByteArray(value, &unused, &error) ? QString() : error;
+    }
+    if (sig == QLatin1String("as")) {
+        bool ok = value.isArray();
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            ok = ok && item.isString();
+        return ok ? QString()
+                  : QStringLiteral("expected an array of strings, got %1").arg(jsonText(value));
+    }
+    if (isDict(sig)) {
+        const QChar key = dictKey(sig);
+        const QString valueSig = dictValue(sig);
+        if (key == QLatin1Char('h'))
+            return QStringLiteral(
+                "unix fd arguments are not supported (they cannot travel over MCP)");
+        if (!elementMetaType(valueSig).isValid())
+            return QStringLiteral("unsupported D-Bus signature '%1' (map value)").arg(valueSig);
+        if (!value.isObject())
+            return QStringLiteral("expected an object for '%1', got %2").arg(sig, jsonText(value));
+        const QJsonObject object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            QVariant unused;
+            QString error;
+            if (!coerceBasic(keyValue(it.key(), key), key, &unused, &error))
+                return prefixed(QStringLiteral("key '%1'").arg(it.key()), error);
+            error = checkValue(it.value(), valueSig, depth + 2);
+            if (!error.isEmpty())
+                return prefixed(QStringLiteral("['%1']").arg(it.key()), error);
+        }
+        return QString();
+    }
+    if (type == QLatin1Char('a')) {
+        const QString element = sig.mid(1);
+        if (!elementMetaType(element).isValid())
+            return QStringLiteral("unsupported D-Bus signature '%1' (array element)").arg(element);
+        if (!value.isArray())
+            return QStringLiteral("expected an array for '%1', got %2").arg(sig, jsonText(value));
+        const QJsonArray array = value.toArray();
+        for (int i = 0; i < array.size(); ++i) {
+            const QString error = checkValue(array.at(i), element, depth + 1);
+            if (!error.isEmpty())
+                return prefixed(QStringLiteral("[%1]").arg(i), error);
+        }
+        return QString();
+    }
+    // A struct: a JSON array with one item per field.
+    const QStringList fields = structFields(sig);
+    const QJsonArray array = value.toArray();
+    if (!value.isArray() || array.size() != fields.size())
+        return QStringLiteral("expected an array of %1 fields for '%2', got %3")
+            .arg(fields.size())
+            .arg(sig, jsonText(value));
+    for (int i = 0; i < fields.size(); ++i) {
+        const QString error = checkValue(array.at(i), fields.at(i), depth + 1);
+        if (!error.isEmpty())
+            return prefixed(QStringLiteral("field %1").arg(i), error);
+    }
+    return QString();
+}
+
+// ------------------------------------------------------------ pass 2: build
+// Only after checkValue() succeeded: nothing below can fail, so every
+// begin*() meets its end*() (libdbus aborts the whole process when an
+// array's content does not match the element type given to beginArray()).
+
+QVariant basicValue(const QJsonValue &value, QChar type)
+{
+    QVariant out;
+    QString unused;
+    coerceBasic(value, type, &out, &unused);
+    return out;
+}
+
+void appendBasic(QDBusArgument &argument, const QVariant &value, QChar type)
+{
+    switch (type.toLatin1()) {
+    case 'y': argument << value.value<uchar>(); break;
+    case 'b': argument << value.toBool(); break;
+    case 'n': argument << value.value<short>(); break;
+    case 'q': argument << value.value<ushort>(); break;
+    case 'i': argument << value.value<int>(); break;
+    case 'u': argument << value.value<uint>(); break;
+    case 'x': argument << value.value<qlonglong>(); break;
+    case 't': argument << value.value<qulonglong>(); break;
+    case 'd': argument << value.toDouble(); break;
+    case 's': argument << value.toString(); break;
+    case 'o': argument << value.value<QDBusObjectPath>(); break;
+    default: argument << value.value<QDBusSignature>(); break; // 'g'
+    }
+}
+
+QVariant build(const QJsonValue &value, const QString &sig);
+
+// The content of a variant: the explicit "@dbus" type, otherwise the natural
+// mapping (scalars as DBusBridge::jsonToVariant maps them; arrays as 'av' and
+// objects as 'a{sv}', whose items may carry "@dbus" again).
+QVariant variantContent(const QJsonValue &value)
+{
+    const QJsonObject object = value.toObject();
+    if (value.isObject() && object.contains(QStringLiteral("@dbus")))
+        return build(object.value(QStringLiteral("value")),
+                     object.value(QStringLiteral("@dbus")).toString());
+    if (value.isArray()) {
+        QVariantList list;
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            list.append(variantContent(item)); // QtDBus sends each item as a variant
+        return list;
+    }
+    if (value.isObject()) {
+        QVariantMap map;
+        for (auto it = object.begin(); it != object.end(); ++it)
+            map.insert(it.key(), variantContent(it.value()));
+        return map;
+    }
+    return DBusBridge::jsonToVariant(value);
+}
+
+void write(QDBusArgument &argument, const QJsonValue &value, const QString &sig)
+{
+    const QChar type = sig.at(0);
+    if (sig.size() == 1 && isBasicType(type)) {
+        appendBasic(argument, basicValue(value, type), type);
+    } else if (sig == QLatin1String("v")) {
+        argument << QDBusVariant(variantContent(value));
+    } else if (sig == QLatin1String("ay")) {
+        argument << build(value, sig).toByteArray();
+    } else if (isDict(sig)) {
+        const QChar key = dictKey(sig);
+        const QString valueSig = dictValue(sig);
+        argument.beginMap(elementMetaType(QString(key)), elementMetaType(valueSig));
+        const QJsonObject object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            argument.beginMapEntry();
+            appendBasic(argument, basicValue(keyValue(it.key(), key), key), key);
+            write(argument, it.value(), valueSig);
+            argument.endMapEntry();
+        }
+        argument.endMap();
+    } else if (type == QLatin1Char('a')) {
+        const QString element = sig.mid(1);
+        argument.beginArray(elementMetaType(element));
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            write(argument, item, element);
+        argument.endArray();
+    } else {
+        const QStringList fields = structFields(sig);
+        const QJsonArray array = value.toArray();
+        argument.beginStructure();
+        for (int i = 0; i < fields.size(); ++i)
+            write(argument, array.at(i), fields.at(i));
+        argument.endStructure();
+    }
+}
+
+// Pass 2 at the root: typed QVariants where QtDBus has a native type,
+// otherwise a QDBusArgument written by hand.
+QVariant build(const QJsonValue &value, const QString &sig)
+{
+    const QChar type = sig.at(0);
+    if (sig.size() == 1 && isBasicType(type))
+        return basicValue(value, type);
+    if (sig == QLatin1String("v"))
+        return QVariant::fromValue(QDBusVariant(variantContent(value)));
+    if (sig == QLatin1String("ay")) {
+        QVariant out;
+        QString unused;
+        coerceByteArray(value, &out, &unused);
+        return out;
+    }
+    if (sig == QLatin1String("as")) {
+        QStringList strings;
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array)
+            strings.append(item.toString());
+        return strings;
+    }
+    QDBusArgument argument;
+    write(argument, value, sig);
+    return QVariant::fromValue(argument);
+}
+
 } // namespace
 
 namespace TypeCoercer {
 
 bool coerce(const QJsonValue &value, const QString &signature, QVariant *out, QString *error)
 {
-    if (signature.size() == 1) {
-        const QChar type = signature.at(0);
-        IntegerRange unused{};
-        if (integerRange(type, &unused))
-            return coerceInteger(value, type, out, error);
-        switch (type.toLatin1()) {
-        case 'b':
-            if (!value.isBool()) {
-                *error = QStringLiteral("expected a boolean, got %1").arg(jsonText(value));
-                return false;
-            }
-            *out = value.toBool();
-            return true;
-        case 'd':
-            if (!value.isDouble()) {
-                *error = QStringLiteral("expected a number, got %1").arg(jsonText(value));
-                return false;
-            }
-            *out = value.toDouble();
-            return true;
-        case 's':
-        case 'o':
-        case 'g':
-            if (!value.isString()) {
-                *error = QStringLiteral("expected a string, got %1").arg(jsonText(value));
-                return false;
-            }
-            if (type == QLatin1Char('s')) {
-                *out = value.toString();
-            } else if (type == QLatin1Char('o')) {
-                if (!isObjectPath(value.toString())) {
-                    *error = QStringLiteral("%1 is not a valid object path").arg(jsonText(value));
-                    return false;
-                }
-                *out = QVariant::fromValue(QDBusObjectPath(value.toString()));
-            } else {
-                *out = QVariant::fromValue(QDBusSignature(value.toString()));
-            }
-            return true;
-        default:
-            break;
-        }
-    } else if (signature == QLatin1String("ay")) {
-        return coerceByteArray(value, out, error);
-    } else if (signature == QLatin1String("as")) {
-        const QJsonArray array = value.toArray();
-        QStringList strings;
-        bool ok = value.isArray();
-        for (const QJsonValue &item : array) {
-            ok = ok && item.isString();
-            strings.append(item.toString());
-        }
-        if (!ok) {
-            *error = QStringLiteral("expected an array of strings, got %1").arg(jsonText(value));
-            return false;
-        }
-        *out = strings;
-        return true;
+    if (!isSingleCompleteType(signature)) {
+        *error = QStringLiteral("'%1' is not a single complete D-Bus type").arg(signature);
+        return false;
     }
-
-    *out = DBusBridge::jsonToVariant(value);
+    const QString problem = checkValue(value, signature, 0);
+    if (!problem.isEmpty()) {
+        *error = problem;
+        return false;
+    }
+    *out = build(value, signature);
     return true;
 }
 
