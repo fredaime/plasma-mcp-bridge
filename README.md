@@ -89,7 +89,7 @@ or as `org.freedesktop.Notifications`, which plasmashell also owns.
 | --- | --- |
 | The system bus is refused by the three D-Bus tools | `--allow-system-bus` |
 | `dbus_call` to a unique connection name (`:1.42`) is refused; with the switch, the rules still apply to the connection behind it | `--allow-unique-names` |
-| A built-in denylist refuses logind power and session methods (`PowerOff*`, `Reboot*`, `Suspend*`, `Terminate*`, `KillSession`, …), logind `Session`/`User` `Terminate` and `Kill`, systemd methods that start, stop, kill or reconfigure units, KWin scripting, plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`, and the bus daemon's `UpdateActivationEnvironment` | `--allow SERVICE:INTERFACE.METHOD` lifts an entry |
+| A built-in denylist refuses logind power and session methods (`PowerOff*`, `Reboot*`, `Suspend*`, `Terminate*`, `KillSession`, …), logind `Session`/`User` `Terminate` and `Kill`, systemd methods that start, stop, kill or reconfigure units, KWin scripting, KWin `killWindow`/`replace` and `/Session` `quit`, kglobalaccel `invokeShortcut` (global shortcuts include "Log Out / Halt Without Confirmation"), plasmashell `evaluateScript`, ksmserver `closeSession`, `org.kde.Shutdown`, and the bus daemon's `UpdateActivationEnvironment` | `--allow SERVICE:INTERFACE.METHOD` lifts an entry |
 | Everything else is allowed | `--deny SERVICE:INTERFACE.METHOD` refuses more; `--default-deny` makes the `--allow` patterns an allowlist |
 
 Patterns read `SERVICE:INTERFACE.METHOD` (the last `.` starts the method),

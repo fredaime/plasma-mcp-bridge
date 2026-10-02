@@ -44,6 +44,10 @@ DENIED = (
     (LOGIN1, LOGIN1_PATH + '/user/self', 'org.freedesktop.login1.User', ('Terminate', 'Kill')),
     ('org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting', (
         'loadScript', 'loadDeclarativeScript', 'unloadScript', 'start')),
+    ('org.kde.KWin', '/KWin', 'org.kde.KWin', ('killWindow', 'replace')),
+    ('org.kde.KWin', '/Session', 'org.kde.KWin.Session', ('quit',)),
+    ('org.kde.kglobalaccel', '/component/ksmserver', 'org.kde.kglobalaccel.Component',
+     ('invokeShortcut',)),
     ('org.kde.ksmserver', '/KSMServer', 'org.kde.KSMServerInterface', ('closeSession', 'logout')),
     ('org.kde.Shutdown', '/Shutdown', 'org.kde.Shutdown', (
         'logout', 'logoutAndShutdown', 'logoutAndReboot')),

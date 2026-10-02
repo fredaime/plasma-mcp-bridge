@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The built-in denylist also refuses KWin `killWindow` (interactive kill
+  mode), `replace` (compositor replacement) and `/Session` `quit` (ends a
+  Wayland session), and kglobalaccel `Component.invokeShortcut`: global
+  shortcuts include "Log Out Without Confirmation" and "Halt Without
+  Confirmation", and the shortcut name is an argument the policy cannot
+  filter. `--allow org.kde.kglobalaccel:org.kde.kglobalaccel.Component.invokeShortcut`
+  lifts it.
+
 ## 0.2.0 (2026-10-02)
 
 ### Fixed

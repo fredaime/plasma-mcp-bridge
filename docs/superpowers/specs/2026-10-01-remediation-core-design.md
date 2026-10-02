@@ -242,6 +242,7 @@ revalidation) :
 - `org.freedesktop.login1:org.freedesktop.login1.Manager.{PowerOff*,Reboot*,Halt*,Suspend*,Hibernate*,HybridSleep*,Sleep*,KExec*,Terminate*,KillSession,KillUser,ScheduleShutdown,SetWallMessage}` (préfixes : variantes `*WithFlags` et `Sleep` — amendement PR5)
 - `org.freedesktop.login1:org.freedesktop.login1.{Session,User}.{Terminate,Kill}` (amendement PR5)
 - `org.kde.KWin:org.kde.kwin.Scripting.*`
+- `org.kde.KWin:org.kde.KWin.{killWindow,replace}`, `org.kde.KWin:org.kde.KWin.Session.quit`, `org.kde.kglobalaccel:org.kde.kglobalaccel.Component.invokeShortcut` (amendement post-0.2.0, revue de la prose de la skill : mode « tuer une fenêtre » interactif, remplacement et arrêt du compositeur, raccourcis globaux dont « Log Out / Halt Without Confirmation » — le nom du raccourci est un argument, non filtrable)
 - `org.kde.ksmserver:org.kde.KSMServerInterface.{closeSession,logout*}`
 - `org.kde.Shutdown:org.kde.Shutdown.*`
 - `org.kde.plasmashell:org.kde.PlasmaShell.evaluateScript`
