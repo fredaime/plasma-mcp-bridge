@@ -54,6 +54,14 @@ const char *const kBuiltinDenylist[] = {
     "org.freedesktop.login1:org.freedesktop.login1.User.Terminate",
     "org.freedesktop.login1:org.freedesktop.login1.User.Kill",
     "org.kde.KWin:org.kde.kwin.Scripting.*",
+    // Not refused by name elsewhere, found in the review of the skill prose:
+    // an interactive kill mode, compositor replacement, compositor exit (ends
+    // a Wayland session), and global shortcuts, which include "Log Out / Halt
+    // Without Confirmation" (the shortcut name is an argument, not filterable).
+    "org.kde.KWin:org.kde.KWin.killWindow",
+    "org.kde.KWin:org.kde.KWin.replace",
+    "org.kde.KWin:org.kde.KWin.Session.quit",
+    "org.kde.kglobalaccel:org.kde.kglobalaccel.Component.invokeShortcut",
     "org.kde.ksmserver:org.kde.KSMServerInterface.closeSession",
     "org.kde.ksmserver:org.kde.KSMServerInterface.logout*",
     "org.kde.Shutdown:org.kde.Shutdown.*",
